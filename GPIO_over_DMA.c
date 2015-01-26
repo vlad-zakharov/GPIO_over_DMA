@@ -252,13 +252,13 @@ map_peripheral(uint32_t base, uint32_t len)
 }
 
 static void
-init_ctrl_data(uint32_t dest)
+init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
 {
   uint32_t phys_fifo_addr;
   uint32_t phys_gpclr0 = 0x7e200000 + 0x28;
   int servo, i, j = 0;
-  dma_cb_t* cbp = page_tab[0].virtPage;
-  uint32_t cb_start = (uint32_t) cbp;
+  dma_cb_t* cbp = (dma_cb_t*) con_blocks->start_virt_address;
+  // uint32_t cb_start = (uint32_t) cbp;
   if (delay_hw == DELAY_VIA_PWM)
     phys_fifo_addr = (PWM_BASE | 0x7e000000) + 0x18;
   else
@@ -275,17 +275,18 @@ init_ctrl_data(uint32_t dest)
   else
     cbp->length = 512;
   cbp->stride = 0;
-  cbp->next = getPhys(cbp + 1);//cb + sizeof(dma_cb_t);
+  cbp->next = mt_get_phys_addr(con_blocks, cbp + 1);//cb + sizeof(dma_cb_t);
   cbp++;
 
-  for (i = 0; i < 512; i++) {
+  for (i = 0; i < 1024; i++) {
     cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP;
     cbp->src = (uint32_t)0x7E003004;//mem_virt_to_phys(ctl->sample + i);
     cbp->dst = dest;
     cbp->length = 4;
     cbp->stride = 0;
-    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp->next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
-    else { cbp->next = getPhys(cbp + 1); cbp++;}//cb + sizeof(dma_cb_t);
+    //    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp->next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
+    cbp->next = mt_get_phys_addr(con_blocks, cbp + 1); 
+    cbp++;//cb + sizeof(dma_cb_t);
     dest+=4;
     // Delay
     if (delay_hw == DELAY_VIA_PWM)
@@ -296,8 +297,10 @@ init_ctrl_data(uint32_t dest)
     cbp->dst = phys_fifo_addr;
     cbp->length = 4;
     cbp->stride = 0;
-    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp-> next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
-    else { cbp->next = getPhys(cbp + 1); cbp++;}//cb + sizeof(dma_cb_t);
+    cbp->next = mt_get_phys_addr(con_blocks, cbp + 1); 
+    //    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp-> next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
+    //  cbp->next = getPhys(cbp + 1); cbp++;}//cb + sizeof(dma_cb_t);
+    cbp++;
   }
   cbp--;
   cbp->next = 0; //mem_virt_to_phys(ctl->cb);
@@ -422,14 +425,13 @@ main(int argc, char **argv)
 
   void *virtAd, *physAd;
   makeVirtPhysPage(&virtAd, &physAd);
-  void *virtCb, *physCb;
-  makeVirtPhysPages(16);
-
+  //  memory_table_t* transfer_page = mt_init(1);
+  memory_table_t* con_blocks = mt_init(16);
   uint32_t dest = (uint32_t) physAd;
   destination = (uint32_t*) virtAd;
-  init_ctrl_data(dest);
+  init_ctrl_data(dest, con_blocks);
   udelay(100);
-  init_hardware((uint32_t) page_tab[0].physPage);
+  init_hardware((uint32_t) *con_blocks->phys_pages);
 
   for(i = 0; i < 500; i++) printf("%u\n", *(destination + i));
   udelay(100);
