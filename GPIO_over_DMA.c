@@ -136,8 +136,14 @@ typedef struct {
 } dma_cb_t;
 
 typedef struct {
+  void *start_virt_address;
+  void **phys_pages;
+  uint32_t page_count;
+} memory_table_t;
+
+typedef struct {
   void *virtPage, *physPage;
-} page_table;
+} page_table_t;
 
 struct ctl {
   uint32_t sample[NUM_SAMPLES];
@@ -157,13 +163,46 @@ static volatile uint32_t *clk_reg;
 static volatile uint32_t *dma_reg;
 static volatile uint32_t *gpio_reg;
 uint32_t* destination;
-static page_table *page_tab;// = malloc(30*sizeof(page_table));
+static page_table_t *page_tab;// = malloc(30*sizeof(page_table));
 
 static int delay_hw = DELAY_VIA_PWM;
 
 // Sets a GPIO to either GPIO_MODE_IN(=0) or GPIO_MODE_OUT(=1)
 
 void* getPhys(void* virtAddr);
+
+static memory_table_t* mt_init(uint32_t page_count)
+{
+  int i;
+  memory_table_t* memory_table = malloc(sizeof(memory_table_t));
+  memory_table->start_virt_address = valloc(page_count * PAGE_SIZE);
+  memory_table->phys_pages = malloc(page_count * sizeof(void*));
+
+  ((int*)memory_table->start_virt_address)[0] = 1;
+  mlock(memory_table->start_virt_address, page_count * PAGE_SIZE);
+  memset(memory_table->start_virt_address, 0, page_count * PAGE_SIZE); //zero-fill the page for convenience                                                                        
+  //Magic to determine the physical address for this page:                                                                                     
+  uint64_t pageInfo;
+  int file = open("/proc/self/pagemap", 'r');////
+  lseek(file, ((uint32_t)memory_table->start_virt_address)/PAGE_SIZE*8, SEEK_SET);
+  for(i = 0; i < page_count; i++)
+    {
+       read(file, &pageInfo, 8); 
+       memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
+       printf("makeVirtPhysPage virtual to phys: %p -> %p\n", memory_table->start_virt_address + PAGE_SIZE * i, memory_table->phys_pages[i]);
+    }
+  close(file);
+  return memory_table;
+}
+
+static void* mt_get_phys_addr(memory_table_t* memory_table, void* virt_addr)
+{
+  //Check does the address belong to this table
+  if((virt_addr < memory_table->start_virt_address) || (virt_addr > memory_table->start_virt_address + PAGE_SIZE * memory_table->page_count / sizeof(void*))) return NULL;
+  
+  return (void*) ((uint32_t)memory_table->phys_pages[((uint32_t) virt_addr - (uint32_t) memory_table->start_virt_address)/PAGE_SIZE] + (uint32_t) virt_addr % PAGE_SIZE);
+}
+
 
 static void
 gpio_set_mode(uint32_t pin, uint32_t mode)
@@ -364,8 +403,9 @@ int
 main(int argc, char **argv)
 {
   int i;
-  destination = (uint32_t*) malloc(4096);
-  page_tab = malloc(30*sizeof(page_table));
+  //  memory_table_t* memory_table = memory_table_init(10);
+  destination = (uint32_t*) malloc(PAGE_SIZE);
+  page_tab = malloc(30*sizeof(page_table_t));
   // Very crude...
   if (argc == 2 && !strcmp(argv[1], "--pcm"))
     delay_hw = DELAY_VIA_PCM;
