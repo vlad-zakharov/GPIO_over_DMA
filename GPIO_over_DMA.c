@@ -141,35 +141,16 @@ typedef struct {
   uint32_t page_count;
 } memory_table_t;
 
-typedef struct {
-  void *virtPage, *physPage;
-} page_table_t;
-
-struct ctl {
-  uint32_t sample[NUM_SAMPLES];
-  dma_cb_t cb[NUM_CBS];
-};
-
-typedef struct {
-  uint8_t *virtaddr;
-  uint32_t physaddr;
-} page_map_t;
-
-page_map_t *page_map;
-
 static volatile uint32_t *pwm_reg;
 static volatile uint32_t *pcm_reg;
 static volatile uint32_t *clk_reg;
 static volatile uint32_t *dma_reg;
 static volatile uint32_t *gpio_reg;
 uint32_t* destination;
-static page_table_t *page_tab;// = malloc(30*sizeof(page_table));
 
 static int delay_hw = DELAY_VIA_PWM;
 
 // Sets a GPIO to either GPIO_MODE_IN(=0) or GPIO_MODE_OUT(=1)
-
-void* getPhys(void* virtAddr);
 
 static memory_table_t* mt_init(uint32_t page_count)
 {
@@ -177,6 +158,7 @@ static memory_table_t* mt_init(uint32_t page_count)
   memory_table_t* memory_table = malloc(sizeof(memory_table_t));
   memory_table->start_virt_address = valloc(page_count * PAGE_SIZE);
   memory_table->phys_pages = malloc(page_count * sizeof(void*));
+  memory_table->page_count = page_count;
 
   ((int*)memory_table->start_virt_address)[0] = 1;
   mlock(memory_table->start_virt_address, page_count * PAGE_SIZE);
@@ -198,7 +180,7 @@ static memory_table_t* mt_init(uint32_t page_count)
 static void* mt_get_phys_addr(memory_table_t* memory_table, void* virt_addr)
 {
   //Check does the address belong to this table
-  if((virt_addr < memory_table->start_virt_address) || (virt_addr > memory_table->start_virt_address + PAGE_SIZE * memory_table->page_count / sizeof(void*))) return NULL;
+  if(((uint32_t)virt_addr < (uint32_t)memory_table->start_virt_address) || ((uint32_t)virt_addr > (uint32_t)memory_table->start_virt_address + PAGE_SIZE * memory_table->page_count)) return NULL;
   
   return (void*) ((uint32_t)memory_table->phys_pages[((uint32_t) virt_addr - (uint32_t) memory_table->start_virt_address)/PAGE_SIZE] + (uint32_t) virt_addr % PAGE_SIZE);
 }
@@ -255,10 +237,8 @@ static void
 init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
 {
   uint32_t phys_fifo_addr;
-  uint32_t phys_gpclr0 = 0x7e200000 + 0x28;
-  int servo, i, j = 0;
+  int i, j = 0;
   dma_cb_t* cbp = (dma_cb_t*) con_blocks->start_virt_address;
-  // uint32_t cb_start = (uint32_t) cbp;
   if (delay_hw == DELAY_VIA_PWM)
     phys_fifo_addr = (PWM_BASE | 0x7e000000) + 0x18;
   else
@@ -275,18 +255,17 @@ init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
   else
     cbp->length = 512;
   cbp->stride = 0;
-  cbp->next = mt_get_phys_addr(con_blocks, cbp + 1);//cb + sizeof(dma_cb_t);
+  cbp->next =(uint32_t) mt_get_phys_addr(con_blocks, cbp + 1);//cb + sizeof(dma_cb_t);
   cbp++;
 
-  for (i = 0; i < 1024; i++) {
+  for (i = 0; i < 1023; i++) {
     cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP;
-    cbp->src = (uint32_t)0x7E003004;//mem_virt_to_phys(ctl->sample + i);
+    cbp->src = (uint32_t)0x7E003004;
     cbp->dst = dest;
     cbp->length = 4;
     cbp->stride = 0;
-    //    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp->next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
-    cbp->next = mt_get_phys_addr(con_blocks, cbp + 1); 
-    cbp++;//cb + sizeof(dma_cb_t);
+    cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1); 
+   cbp++;
     dest+=4;
     // Delay
     if (delay_hw == DELAY_VIA_PWM)
@@ -297,13 +276,11 @@ init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
     cbp->dst = phys_fifo_addr;
     cbp->length = 4;
     cbp->stride = 0;
-    cbp->next = mt_get_phys_addr(con_blocks, cbp + 1); 
-    //    if(cbp + 1 >= cb_start + PAGE_SIZE){cbp-> next =page_tab[++j].physPage;  cbp = page_tab[j].virtPage; cb_start = (uint32_t) cbp;}
-    //  cbp->next = getPhys(cbp + 1); cbp++;}//cb + sizeof(dma_cb_t);
+    cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1); 
     cbp++;
   }
   cbp--;
-  cbp->next = 0; //mem_virt_to_phys(ctl->cb);
+  cbp->next = 0;
 }
 
 // Initialize PWM (or PCM) and DMA
@@ -363,52 +340,12 @@ init_hardware(uint32_t physCb)
 
 // Endless loop to read the FIFO DEVFILE and set the servos according
 
-void makeVirtPhysPage(void** virtAddr, void** physAddr) {
-  *virtAddr = valloc(PAGE_SIZE); //allocate one page of RAM
-  //force page into RAM and then lock it there:                                                                                                
-  ((int*)*virtAddr)[0] = 1;
-  mlock(*virtAddr, PAGE_SIZE);
-  memset(*virtAddr, 0, PAGE_SIZE); //zero-fill the page for convenience                                                                        
-
-  //Magic to determine the physical address for this page:                                                                                     
-  uint64_t pageInfo;
-  int file = open("/proc/self/pagemap", 'r');
-  lseek(file, ((uint32_t)*virtAddr)/PAGE_SIZE*8, SEEK_SET);
-  read(file, &pageInfo, 8);
-
-  *physAddr = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-  printf("makeVirtPhysPage virtual to phys: %p -> %p\n", *virtAddr, *physAddr);
-}
-
-
-void makeVirtPhysPages(uint32_t numPages)
-{
-  uint32_t i = 0;
-  for(i = 0; i < numPages; i++)
-    {
-       makeVirtPhysPage(&page_tab[i].virtPage, &page_tab[i].physPage);
-    }
-}
-
-void* getPhys(void* virtAddr)
-{
-  void* physAddr = (void*) -1;
-  uint32_t i = 0;
-  for(i = 0; i < 16; i++)
-    {
-      if(((int)virtAddr)/PAGE_SIZE == ((int)page_tab[i].virtPage)/PAGE_SIZE) physAddr = (void*) ((int)page_tab[i].physPage + ((int)virtAddr)%PAGE_SIZE);
-    }
-  return physAddr;
-}
-
-
 int
 main(int argc, char **argv)
 {
   int i;
   //  memory_table_t* memory_table = memory_table_init(10);
   destination = (uint32_t*) malloc(PAGE_SIZE);
-  page_tab = malloc(30*sizeof(page_table_t));
   // Very crude...
   if (argc == 2 && !strcmp(argv[1], "--pcm"))
     delay_hw = DELAY_VIA_PCM;
@@ -422,18 +359,13 @@ main(int argc, char **argv)
     gpio_set(gpio_list[i], 0);
     gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
   }
-
   void *virtAd, *physAd;
-  makeVirtPhysPage(&virtAd, &physAd);
-  //  memory_table_t* transfer_page = mt_init(1);
+  memory_table_t* transfer_page = mt_init(1); 
   memory_table_t* con_blocks = mt_init(16);
-  uint32_t dest = (uint32_t) physAd;
-  destination = (uint32_t*) virtAd;
-  init_ctrl_data(dest, con_blocks);
+  init_ctrl_data((uint32_t) transfer_page->phys_pages[0], con_blocks);
   udelay(100);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-
-  for(i = 0; i < 500; i++) printf("%u\n", *(destination + i));
+  for(i = 0; i < 1023; i++) printf("%u\n", *((uint32_t*) transfer_page->start_virt_address + i));
   udelay(100);
   return 0;
 }
