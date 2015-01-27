@@ -27,38 +27,7 @@ static uint8_t gpio_list[] = {
 
 #define NUM_GPIOS       (sizeof(gpio_list)/sizeof(gpio_list[0]))
 
-// PERIOD_TIME_US is the pulse cycle time (period) per servo, in microseconds.
-// Typically servos expect it to be 20,000us (20ms). If you are using
-// 8 channels (gpios), this results in a 2.5ms timeslot per gpio channel. A
-// servo output is set high at the start of its 2.5ms timeslot, and set low
-// after the appropriate delay.
-#define PERIOD_TIME_US       20000
-
-// PULSE_WIDTH_INCR_US is the pulse width increment granularity, again in microseconds.
-// Setting it too low will likely cause problems as the DMA controller will use too much
-//memory bandwidth. 10us is a good value, though you might be ok setting it as low as 2us.
-#define PULSE_WIDTH_INCR_US  10
-
-// Timeslot per channel (delay between setting pulse information)
-// With this delay it will arrive at the same channel after PERIOD_TIME.
-#define CHANNEL_TIME_US      (PERIOD_TIME_US/NUM_GPIOS)
-
-// CHANNEL_SAMPLES is the maximum number of PULSE_WIDTH_INCR_US that fit into one gpio
-// channels timeslot. (eg. 250 for a 2500us timeslot with 10us PULSE_WIDTH_INCREMENT)
-#define CHANNEL_SAMPLES      (CHANNEL_TIME_US/PULSE_WIDTH_INCR_US)
-
-// Min and max channel width settings (used only for controlling user input)
-#define CHANNEL_WIDTH_MIN    0
-#define CHANNEL_WIDTH_MAX    (CHANNEL_SAMPLES - 1)
-
-// Various
-#define NUM_SAMPLES          (PERIOD_TIME_US/PULSE_WIDTH_INCR_US)
-#define NUM_CBS              (NUM_SAMPLES*2)
-
 #define PAGE_SIZE            4096
-#define PAGE_SHIFT           12
-#define NUM_PAGES            ((NUM_CBS * 32 + NUM_SAMPLES * 4 + \
-			       PAGE_SIZE - 1) >> PAGE_SHIFT)
 
 // Memory Addresses
 #define DMA_BASE        0x20007000
@@ -86,6 +55,7 @@ static uint8_t gpio_list[] = {
 #define DMA_DEBUG       (0x20/4)
 
 // GPIO Memory Addresses
+#define GPIO_LEV0_ADDR  0x7E200034 
 #define GPIO_FSEL0      (0x00/4)
 #define GPIO_SET0       (0x1c/4)
 #define GPIO_CLR0       (0x28/4)
@@ -185,6 +155,17 @@ static void* mt_get_phys_addr(memory_table_t* memory_table, void* virt_addr)
   return (void*) ((uint32_t)memory_table->phys_pages[((uint32_t) virt_addr - (uint32_t) memory_table->start_virt_address)/PAGE_SIZE] + (uint32_t) virt_addr % PAGE_SIZE);
 }
 
+static void* mt_get_virt_addr(memory_table_t* memory_table, void* phys_addr)
+{
+  int i;
+  for(i = 0; i < memory_table->page_count; i++)
+    {
+        if ((uint32_t) memory_table->phys_pages[i] == (((uint32_t) phys_addr) & 0xFFFFF000)){
+	  return (void*) ((uint32_t) memory_table->start_virt_address + PAGE_SIZE * i + ((uint32_t) phys_addr & 0xFFF));
+      }
+    }
+  return NULL;
+}
 
 static void
 gpio_set_mode(uint32_t pin, uint32_t mode)
@@ -234,7 +215,7 @@ map_peripheral(uint32_t base, uint32_t len)
 }
 
 
-
+//Method to init DMA control block
 static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
 {
   (*cbp)->info = mode;
@@ -246,29 +227,30 @@ static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t
 }
 
 static void
-init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
+init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
 {
   uint32_t phys_fifo_addr, i;
+  uint32_t* dest = mem_table->start_virt_address;
   dma_cb_t* cbp = (dma_cb_t*) con_blocks->start_virt_address;
  
   if (delay_hw == DELAY_VIA_PWM)
     phys_fifo_addr = (PWM_BASE | 0x7e000000) + 0x18;
   else
     phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
-  //Init first dma control block, that will fill the fifo (for delay)
-  if (delay_hw == DELAY_VIA_PWM)
-    init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 64, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
-  else
-    init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 512, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
-  cbp++;
 
   //Init dma control blocks
-  for (i = 0; i < 1023; i++) 
+  for (i = 0; i < 1024; i++) 
     {
-      // Transfer
-      init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, TIMER_BASE, dest, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+      //Transfer timer every 25th sample
+      if(i % 25 == 0){
+	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, TIMER_BASE, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+	cbp++;
+	dest++;
+      }
+      // Transfer GPIO
+      init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
       cbp++;
-      dest+=4;
+      dest++;
       // Delay
       if (delay_hw == DELAY_VIA_PWM)
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
@@ -277,7 +259,7 @@ init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
       cbp++;
     }
   cbp--;
-  cbp->next = 0;
+  cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->start_virt_address);
 }
 
 // Initialize PWM (or PCM) and DMA
@@ -290,11 +272,11 @@ init_hardware(uint32_t physCb)
     udelay(10);
     clk_reg[PWMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
     udelay(10);
-    clk_reg[PWMCLK_DIV] = 0x5A000000 | (50<<12);    // set pwm div to 50, giving 10MHz
+    clk_reg[PWMCLK_DIV] = 0x5A000000 | (5000<<12);    // set pwm div to 50, giving 10MHz
     udelay(10);
     clk_reg[PWMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
     udelay(10);
-    pwm_reg[PWM_RNG1] = PULSE_WIDTH_INCR_US * 10;
+    pwm_reg[PWM_RNG1] = 100;
     udelay(10);
     pwm_reg[PWM_DMAC] = PWMDMAC_ENAB | PWMDMAC_THRSHLD;
     udelay(10);
@@ -313,7 +295,7 @@ init_hardware(uint32_t physCb)
     udelay(100);
     pcm_reg[PCM_TXC_A] = 0<<31 | 1<<30 | 0<<20 | 0<<16; // 1 channel, 8 bits
     udelay(100);
-    pcm_reg[PCM_MODE_A] = (PULSE_WIDTH_INCR_US * 10 - 1) << 10;
+    pcm_reg[PCM_MODE_A] = (10 - 1) << 10;
     udelay(100);
     pcm_reg[PCM_CS_A] |= 1<<4 | 1<<3;        // Clear FIFOs
     udelay(100);
@@ -357,12 +339,19 @@ main(int argc, char **argv)
     gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
   }
   void *virtAd, *physAd;
-  memory_table_t* transfer_page = mt_init(1); 
-  memory_table_t* con_blocks = mt_init(16);
-  init_ctrl_data((uint32_t) transfer_page->phys_pages[0], con_blocks);
-  udelay(100);
+  memory_table_t* trans_page = mt_init(2); 
+  memory_table_t* con_blocks = mt_init(24);
+  init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  for(i = 0; i < 1023; i++) printf("%u\n", *((uint32_t*) transfer_page->start_virt_address + i));
-  udelay(100);
+  sleep(1);
+  dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
+  for(i = 0; i < 1024; i++) printf("%x\n", *((uint32_t*) trans_page->start_virt_address + i));
+  void* x;
+  for(i = 0; i < 3; i++){
+    x = mt_get_virt_addr(trans_page, (void*) (((dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD])) + i)->dst);
+    if(x != NULL) {
+	break;}
+  }
+  printf("dma dst: %p -> %d\n", x, *((int*) x));
   return 0;
 }
