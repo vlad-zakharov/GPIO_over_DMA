@@ -25,7 +25,6 @@ static uint8_t gpio_list[] = {
   25,    // P1-22
 };
 
-#define DEVFILE         "/dev/rpio-pwm"
 #define NUM_GPIOS       (sizeof(gpio_list)/sizeof(gpio_list[0]))
 
 // PERIOD_TIME_US is the pulse cycle time (period) per servo, in microseconds.
@@ -72,6 +71,7 @@ static uint8_t gpio_list[] = {
 #define GPIO_LEN        0x100
 #define PCM_BASE        0x20203000
 #define PCM_LEN         0x24
+#define TIMER_BASE      0x7E003004
 
 #define DMA_NO_WIDE_BURSTS  (1<<26)
 #define DMA_WAIT_RESP   (1<<3)
@@ -233,52 +233,49 @@ map_peripheral(uint32_t base, uint32_t len)
   return vaddr;
 }
 
+
+
+static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
+{
+  (*cbp)->info = mode;
+  (*cbp)->src = source;
+  (*cbp)->dst = dest;
+  (*cbp)->length = length;
+  (*cbp)->next = next_cb;
+  (*cbp)->stride = stride;
+}
+
 static void
 init_ctrl_data(uint32_t dest, memory_table_t* con_blocks)
 {
-  uint32_t phys_fifo_addr;
-  int i, j = 0;
+  uint32_t phys_fifo_addr, i;
   dma_cb_t* cbp = (dma_cb_t*) con_blocks->start_virt_address;
+ 
   if (delay_hw == DELAY_VIA_PWM)
     phys_fifo_addr = (PWM_BASE | 0x7e000000) + 0x18;
   else
     phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
-
+  //Init first dma control block, that will fill the fifo (for delay)
   if (delay_hw == DELAY_VIA_PWM)
-    cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5);
+    init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 64, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
   else
-    cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2);
-  cbp->src = (uint32_t)0x7E003004;    // Any data will do
-  cbp->dst = phys_fifo_addr;
-  if (delay_hw == DELAY_VIA_PWM)
-    cbp->length = 64;
-  else
-    cbp->length = 512;
-  cbp->stride = 0;
-  cbp->next =(uint32_t) mt_get_phys_addr(con_blocks, cbp + 1);//cb + sizeof(dma_cb_t);
+    init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 512, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
   cbp++;
 
-  for (i = 0; i < 1023; i++) {
-    cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP;
-    cbp->src = (uint32_t)0x7E003004;
-    cbp->dst = dest;
-    cbp->length = 4;
-    cbp->stride = 0;
-    cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1); 
-   cbp++;
-    dest+=4;
-    // Delay
-    if (delay_hw == DELAY_VIA_PWM)
-      cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5);
-    else
-      cbp->info = DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2);
-    cbp->src = (uint32_t)0x7E003004;    // Any data will do
-    cbp->dst = phys_fifo_addr;
-    cbp->length = 4;
-    cbp->stride = 0;
-    cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1); 
-    cbp++;
-  }
+  //Init dma control blocks
+  for (i = 0; i < 1023; i++) 
+    {
+      // Transfer
+      init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, TIMER_BASE, dest, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+      cbp++;
+      dest+=4;
+      // Delay
+      if (delay_hw == DELAY_VIA_PWM)
+	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+      else
+	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+      cbp++;
+    }
   cbp--;
   cbp->next = 0;
 }
