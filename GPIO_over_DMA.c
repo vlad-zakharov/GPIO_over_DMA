@@ -243,7 +243,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
   for (i = 0; i < 960; i++) 
     {
-      printf("i %d\n", i);
+      //printf("i %d\n", i);
       //Transfer timer every 25th sample
       if(i % 30 == 0){
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_addr(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
@@ -344,27 +344,51 @@ main(int argc, char **argv)
   }
   memory_table_t* trans_page = mt_init(1); 
   memory_table_t* con_blocks = mt_init(61);
-  void* curr_pointer = (void*) trans_page->start_virt_address;
+  uint32_t* curr_pointer = (uint32_t*) trans_page->start_virt_address;
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  udelay(500);
+  udelay(300);
 
 
-
-  //Обработка сигнала
-  for(;;){
+  uint32_t curr_signal = 0, last_signal = 0;
+  uint32_t curr_time;
+  //sighandler
+  for(i = 0; i < 100; i++){
+    int j;
     void* x;
-    for(i = 0; i < 3; i++){
-      x = mt_get_virt_addr(trans_page, (void*) (((dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD])) + i)->dst);
+    //uint32_t curr_signal, last_signal;
+    //uint64_t curr_time;
+    dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
+    for(j = -1; j < 1; j++){
+      //x = mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
+      x = (void*) mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);
+      //      if(x == ((PCM_BASE | 0x7e000000) + 0x04))
       if(x != NULL) {
 	break;}
     }
+    if(x == NULL) printf("null\n");
+    /*printf("x %p\n", x);
+      printf("*x %u\n", *((uint32_t*) x)); */
     //accessing memory
     //cycle, begin - curr_pointer, end - write_mem
-    for(;curr_pointer < 
+    for(;(uint32_t) curr_pointer < (uint32_t) x; curr_pointer++){
+      //main cycle
+      if ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  32 == 0){
+	//THIS IS TIME
+	curr_time == *((uint64_t*) curr_pointer);
+	curr_pointer+=2;
+      }
+      curr_signal = *curr_pointer;
+      if(curr_signal != last_signal){
+	printf("Sig_changed at %u\n", curr_time);
+	last_signal = curr_signal;
+      }
+      else last_signal = curr_signal;
+    }
+    udelay(200);
   }
 
-
+  /*
 
   dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
   for(i = 100; i < 150; i++){
@@ -382,6 +406,6 @@ main(int argc, char **argv)
 	break;}
   }
   if(x == NULL) printf ("@#$@#$@#$@#$\n");
-  printf("dma dst: %p -> %d\n", x, *((int*) x));
+  printf("dma dst: %p -> %d\n", x, *((int*) x));*/
   return 0;
 }
