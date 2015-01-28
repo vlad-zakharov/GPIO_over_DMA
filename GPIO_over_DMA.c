@@ -243,6 +243,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
   for (i = 0; i < 960; i++) 
     {
+      printf("i %d\n", i);
       //Transfer timer every 25th sample
       if(i % 30 == 0){
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_addr(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
@@ -251,6 +252,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
       }
       // Transfer GPIO
       init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
+      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
       cbp++;
       dest++;
       // Delay
@@ -261,7 +263,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
       cbp++;
     }
   cbp--;
-  cbp->next = 0;//(uint32_t) mt_get_phys_addr(con_blocks, con_blocks->start_virt_address);
+  cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->start_virt_address);
 }
 
 // Initialize PWM (or PCM) and DMA
@@ -340,20 +342,38 @@ main(int argc, char **argv)
     gpio_set(gpio_list[i], 0);
     gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
   }
-  void *virtAd, *physAd;
   memory_table_t* trans_page = mt_init(1); 
   memory_table_t* con_blocks = mt_init(61);
+  void* curr_pointer = (void*) trans_page->start_virt_address;
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  sleep(1);
+  udelay(500);
+
+
+
+  //Обработка сигнала
+  for(;;){
+    void* x;
+    for(i = 0; i < 3; i++){
+      x = mt_get_virt_addr(trans_page, (void*) (((dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD])) + i)->dst);
+      if(x != NULL) {
+	break;}
+    }
+    //accessing memory
+    //cycle, begin - curr_pointer, end - write_mem
+    for(;curr_pointer < 
+  }
+
+
+
   dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
-  for(i = 0; i < 1024; i++){
+  for(i = 100; i < 150; i++){
     //if(i % 26 == 0){
       // printf("%llu\n", *((uint32_t*) trans_page->start_virt_address + i));
       //i++;
     //}
     //else
-      printf("%x\n", *((uint32_t*) trans_page->start_virt_address + i));     
+    printf("data:%x virt_addr: %p\n", *((uint32_t*) trans_page->start_virt_address + i), (uint32_t*) trans_page->start_virt_address + i);     
   }
   void* x;
   for(i = 0; i < 3; i++){
@@ -361,6 +381,7 @@ main(int argc, char **argv)
     if(x != NULL) {
 	break;}
   }
+  if(x == NULL) printf ("@#$@#$@#$@#$\n");
   printf("dma dst: %p -> %d\n", x, *((int*) x));
   return 0;
 }
