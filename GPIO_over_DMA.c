@@ -218,12 +218,12 @@ map_peripheral(uint32_t base, uint32_t len)
 }
 
 
-
+/*
 static uint32_t* get_buf_addr(uint32_t *address, void* buf_adress, uint32_t buf_page_count)
 {
-  return (uint32_t) curr_pointer >= (uint32_t) buf__address + PAGE_SIZE * buf_page_count) ? (uint32_t*) buf_adress + (uint32_t) adress & 0x1111111000 : adress;
+  return (uint32_t) address >= (uint32_t) buf_address + PAGE_SIZE * buf_page_count) ? (uint32_t*) buf_adress + (uint32_t) adress & 0x1111111000 : adress;
 
-}
+  }*/
 
 //Method to init DMA control block
 static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
@@ -391,7 +391,7 @@ main(int argc, char **argv)
 
 
     // THE PROBLEM IS THAT WE CAN JUMP OVER X, AND IT IS BAD. 1 SOLUTION - COMPARE NOT ONLY WITH CURR_POINTER BUT ALSO WITH CURR_POINTER -1 -2
-    //THE SECOND WAY IS TO CHANGE THIS ALGORYTHM. THE NEW ONE IS 1 BYTE 1 ITERATION. 
+    //THE SECOND WAY IS TO CHANGE THIS ALGORYTHM. THE NEW ONE IS 1 BYTE 1 ITERATION. Detect: printf x at the end at curr_pointer at the end.
     for(;(uint32_t) curr_pointer != (uint32_t) x;){
       //main cycle
       //printf("%p\n", curr_pointer);
@@ -403,7 +403,7 @@ main(int argc, char **argv)
 	z++;
 	//printf("time %x\n", curr_time);
 	 if(z == 1000) {z = 0;
-	   for (i = 0; i < 1000; i++) printf(" pointer %p time %lld\n", time_p[i], time1[i]);
+	   //for (i = 0; i < 1000; i++) printf(" pointer %p time %lld\n", time_p[i], time1[i]);
 	 }
    
 	curr_pointer+=2;
@@ -417,6 +417,7 @@ main(int argc, char **argv)
       else last_signal = curr_signal;
       curr_pointer++;
       if((uint32_t) curr_pointer >= (uint32_t) trans_page->start_virt_address + PAGE_SIZE * trans_page->page_count) curr_pointer = trans_page->start_virt_address;
+      printf("x: %p p: %p\n", x, curr_pointer);
     }
     udelay(100);
   }
