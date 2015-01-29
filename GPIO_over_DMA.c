@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "PCA9685.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -143,7 +144,7 @@ static memory_table_t* mt_init(uint32_t page_count)
     {
        read(file, &pageInfo, 8); 
        memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-       printf("makeVirtPhysPage virtual to phys: %p -> %p\n", memory_table->start_virt_address + PAGE_SIZE * i, memory_table->phys_pages[i]);
+       //       printf("makeVirtPhysPage virtual to phys: %p -> %p\n", memory_table->start_virt_address + PAGE_SIZE * i, memory_table->phys_pages[i]);
     }
   close(file);
   return memory_table;
@@ -217,6 +218,13 @@ map_peripheral(uint32_t base, uint32_t len)
 }
 
 
+
+static uint32_t* get_buf_addr(uint32_t *address, void* buf_adress, uint32_t buf_page_count)
+{
+  return (uint32_t) curr_pointer >= (uint32_t) buf__address + PAGE_SIZE * buf_page_count) ? (uint32_t*) buf_adress + (uint32_t) adress & 0x1111111000 : adress;
+
+}
+
 //Method to init DMA control block
 static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
 {
@@ -252,7 +260,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
       }
       // Transfer GPIO
       init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp + 1));
-      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
+      //      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
       cbp++;
       dest++;
       // Delay
@@ -347,13 +355,22 @@ main(int argc, char **argv)
   uint32_t* curr_pointer = (uint32_t*) trans_page->start_virt_address;
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  udelay(300);
+  udelay(300000);
 
 
   uint32_t curr_signal = 0, last_signal = 0;
   uint32_t curr_time;
   //sighandler
-  for(i = 0; i < 100; i++){
+
+  /*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
+    for(i = 0; i < 1024; i++){
+    printf("data:%x virt_addr: %p\n", *((uint32_t*) trans_page->start_virt_address + i), (uint32_t*) trans_page->start_virt_address + i);     
+    }*/
+
+  uint64_t* time1 = malloc(1000*sizeof(uint64_t));
+  uint64_t** time_p = malloc(1000*sizeof(uint64_t*));
+  int z = 0;
+  for(;;){
     int j;
     void* x;
     //uint32_t curr_signal, last_signal;
@@ -366,40 +383,44 @@ main(int argc, char **argv)
       if(x != NULL) {
 	break;}
     }
-    if(x == NULL) printf("null\n");
-    /*printf("x %p\n", x);
-      printf("*x %u\n", *((uint32_t*) x)); */
+    
+    //    if(x == NULL) printf("null\n");
+    //    printf("x %p, curr_p %p\n", x, curr_pointer);
     //accessing memory
-    //cycle, begin - curr_pointer, end - write_mem
-    for(;(uint32_t) curr_pointer < (uint32_t) x; curr_pointer++){
+    //cycle, begin - curr_pointer, end - write_mem 
+
+
+    // THE PROBLEM IS THAT WE CAN JUMP OVER X, AND IT IS BAD. 1 SOLUTION - COMPARE NOT ONLY WITH CURR_POINTER BUT ALSO WITH CURR_POINTER -1 -2
+    //THE SECOND WAY IS TO CHANGE THIS ALGORYTHM. THE NEW ONE IS 1 BYTE 1 ITERATION. 
+    for(;(uint32_t) curr_pointer != (uint32_t) x;){
       //main cycle
-      if ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  32 == 0){
+      //printf("%p\n", curr_pointer);
+      if ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  (32*4) == 0){
 	//THIS IS TIME
-	curr_time == *((uint64_t*) curr_pointer);
+	curr_time = *(curr_pointer);
+	time_p[z] = (uint64_t*) curr_pointer;
+	time1[z] = curr_time;
+	z++;
+	//printf("time %x\n", curr_time);
+	 if(z == 1000) {z = 0;
+	   for (i = 0; i < 1000; i++) printf(" pointer %p time %lld\n", time_p[i], time1[i]);
+	 }
+   
 	curr_pointer+=2;
       }
-      curr_signal = *curr_pointer;
+      //printf("c %#x l %#x\n", curr_signal, last_signal);
+      curr_signal = *curr_pointer & 0x10 ? 1 : 0;
       if(curr_signal != last_signal){
-	printf("Sig_changed at %u\n", curr_time);
+	//printf("%d %u\n", curr_signal, curr_time/* + ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  (32*4))/4*/);
 	last_signal = curr_signal;
       }
       else last_signal = curr_signal;
+      curr_pointer++;
+      if((uint32_t) curr_pointer >= (uint32_t) trans_page->start_virt_address + PAGE_SIZE * trans_page->page_count) curr_pointer = trans_page->start_virt_address;
     }
-    udelay(200);
+    udelay(100);
   }
-
-  /*
-
-  dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
-  for(i = 100; i < 150; i++){
-    //if(i % 26 == 0){
-      // printf("%llu\n", *((uint32_t*) trans_page->start_virt_address + i));
-      //i++;
-    //}
-    //else
-    printf("data:%x virt_addr: %p\n", *((uint32_t*) trans_page->start_virt_address + i), (uint32_t*) trans_page->start_virt_address + i);     
-  }
-  void* x;
+  /*void* x;
   for(i = 0; i < 3; i++){
     x = mt_get_virt_addr(trans_page, (void*) (((dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD])) + i)->dst);
     if(x != NULL) {
