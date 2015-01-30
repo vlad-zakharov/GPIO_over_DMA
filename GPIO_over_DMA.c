@@ -249,7 +249,7 @@ init_ctrl_data(memory_table_t* mem_table, memory_table_t* con_blocks)
     phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
 
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
-  for (i = 0; i < 960; i++) 
+  for (i = 0; i < 4800; i++) 
     {
       //printf("i %d\n", i);
       //Transfer timer every 25th sample
@@ -301,7 +301,7 @@ init_hardware(uint32_t physCb)
     udelay(100);
     clk_reg[PCMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
     udelay(100);
-    clk_reg[PCMCLK_DIV] = 0x5A000000 | (50<<12);    // Set pcm div to 50, giving 10MHz
+    clk_reg[PCMCLK_DIV] = 0x5A000000 | (500<<12);    // Set pcm div to 50, giving 10MHz
     udelay(100);
     clk_reg[PCMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
     udelay(100);
@@ -331,9 +331,20 @@ init_hardware(uint32_t physCb)
 
 // Endless loop to read the FIFO DEVFILE and set the servos according
 
+uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
+{
+  //  printf("read_addr %p write_addr %p\n", read_addr, write_addr);
+  if( write_addr > read_addr ) return ((uint32_t) write_addr - (uint32_t) read_addr);
+  else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
+}
+
 int
 main(int argc, char **argv)
 {
+  //  sleep(2)
+  int pid = (int) getpid();
+  char* set_rt_priority = malloc(sizeof(char)*40);
+  if(system(sprintf(set_rt_priority, "sudo chrt -f -p 99 %d\n", pid)) == -1) printf("Error while executing \"system\" syscall =(\n");
   int i;
   //  memory_table_t* memory_table = memory_table_init(10);
   destination = (uint32_t*) malloc(PAGE_SIZE);
@@ -350,25 +361,27 @@ main(int argc, char **argv)
     gpio_set(gpio_list[i], 0);
     gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
   }
-  memory_table_t* trans_page = mt_init(1); 
-  memory_table_t* con_blocks = mt_init(61);
+  memory_table_t* trans_page = mt_init(5); 
+  memory_table_t* con_blocks = mt_init(305);
   uint32_t* curr_pointer = (uint32_t*) trans_page->start_virt_address;
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  udelay(300000);
+  udelay(30000);
 
 
   uint32_t curr_signal = 0, last_signal = 0;
   uint32_t curr_time;
   //sighandler
 
-  /*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
-    for(i = 0; i < 1024; i++){
-    printf("data:%x virt_addr: %p\n", *((uint32_t*) trans_page->start_virt_address + i), (uint32_t*) trans_page->start_virt_address + i);     
-    }*/
-
+  /*  dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
+    for(i = 0; i < 5 * 1024; i++){
+      if(i%32 == 0)
+	printf("time:%llu virt_addr:\n", *((uint64_t*) trans_page->start_virt_address + i/2));
+	}
+	exit(0);*/
   uint64_t* time1 = malloc(1000*sizeof(uint64_t));
   uint64_t** time_p = malloc(1000*sizeof(uint64_t*));
+  uint32_t*  coun = malloc(1000*sizeof(uint32_t));
   int z = 0;
   for(;;){
     int j;
@@ -376,9 +389,9 @@ main(int argc, char **argv)
     //uint32_t curr_signal, last_signal;
     //uint64_t curr_time;
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
-    for(j = -1; j < 1; j++){
+    for(j = 0; j >= -1; j--){
       //x = mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
-      x = (void*) mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);
+      x = (void*) mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);//What i
       //      if(x == ((PCM_BASE | 0x7e000000) + 0x04))
       if(x != NULL) {
 	break;}
@@ -392,21 +405,30 @@ main(int argc, char **argv)
 
     // THE PROBLEM IS THAT WE CAN JUMP OVER X, AND IT IS BAD. 1 SOLUTION - COMPARE NOT ONLY WITH CURR_POINTER BUT ALSO WITH CURR_POINTER -1 -2
     //THE SECOND WAY IS TO CHANGE THIS ALGORYTHM. THE NEW ONE IS 1 BYTE 1 ITERATION. Detect: printf x at the end at curr_pointer at the end.
-    for(;(uint32_t) curr_pointer != (uint32_t) x;){
-      //main cycle
+    //Maybe 
+    //If less than 3 bytes stop!!!!! If %32 then read ho?
+    //dma_reg[DMA_CS] &= 0xFFFFFFFE;
+    //uint32_t b_a = bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE);
+    //может и не совпадать
+    uint32_t counter = (bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
+    //    printf("counter %#X\n", counter);      //main cycle
+    for(;counter > 0;counter--){//change this rule.
+
       //printf("%p\n", curr_pointer);
       if ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  (32*4) == 0){
 	//THIS IS TIME
 	curr_time = *(curr_pointer);
 	time_p[z] = (uint64_t*) curr_pointer;
 	time1[z] = curr_time;
+	coun[z] = counter;
+	//	coun[z] = counter;
 	z++;
-	//printf("time %x\n", curr_time);
+	//printf("time %x at adress %p when x is %p\n", curr_time, curr_pointer, x);
 	 if(z == 1000) {z = 0;
-	   //for (i = 0; i < 1000; i++) printf(" pointer %p time %lld\n", time_p[i], time1[i]);
+	   for (i = 0; i < 1000; i++) printf(" pointer %p time %lld counter %x\n", time_p[i], time1[i], coun[i]);
 	 }
-   
-	curr_pointer+=2;
+   	curr_pointer+=2;
+	counter-=2;
       }
       //printf("c %#x l %#x\n", curr_signal, last_signal);
       curr_signal = *curr_pointer & 0x10 ? 1 : 0;
@@ -417,8 +439,9 @@ main(int argc, char **argv)
       else last_signal = curr_signal;
       curr_pointer++;
       if((uint32_t) curr_pointer >= (uint32_t) trans_page->start_virt_address + PAGE_SIZE * trans_page->page_count) curr_pointer = trans_page->start_virt_address;
-      printf("x: %p p: %p\n", x, curr_pointer);
+      //      printf("x: %p p: %p\n", x, curr_pointer);
     }
+    //    dma_reg[DMA_CS] |= 0x1; Переход в цикле! Переход в цикле! Переход в ЦИКЛЕЕЕЕЕ
     udelay(100);
   }
   /*void* x;
