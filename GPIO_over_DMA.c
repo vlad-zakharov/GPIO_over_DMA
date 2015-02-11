@@ -301,7 +301,7 @@ init_hardware(uint32_t physCb)
     udelay(100);
     clk_reg[PCMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
     udelay(100);
-    clk_reg[PCMCLK_DIV] = 0x5A000000 | (500<<12);    // Set pcm div to 50, giving 10MHz
+    clk_reg[PCMCLK_DIV] = 0x5A000000 | (50<<12);    // Set pcm div to 50, giving 10MHz
     udelay(100);
     clk_reg[PCMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
     udelay(100);
@@ -342,9 +342,13 @@ int
 main(int argc, char **argv)
 {
   //  sleep(2)
+  mlockall(MCL_CURRENT|MCL_FUTURE);
   int pid = (int) getpid();
   char* set_rt_priority = malloc(sizeof(char)*40);
-  if(system(sprintf(set_rt_priority, "sudo chrt -f -p 99 %d\n", pid)) == -1) printf("Error while executing \"system\" syscall =(\n");
+  int sys_res = system(sprintf(set_rt_priority, "sudo chrt -f -p 99 %d\n", pid));
+  printf("sys res %x\n", sys_res);
+  if((sys_res == -1) || (sys_res == 0)) {printf("Error while executing \"system\" syscall =(\n"); exit(1488);}
+  sleep(60);
   int i;
   //  memory_table_t* memory_table = memory_table_init(10);
   destination = (uint32_t*) malloc(PAGE_SIZE);
@@ -366,22 +370,23 @@ main(int argc, char **argv)
   uint32_t* curr_pointer = (uint32_t*) trans_page->start_virt_address;
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages);
-  udelay(30000);
+  udelay(300000);
 
 
   uint32_t curr_signal = 0, last_signal = 0;
   uint32_t curr_time;
   //sighandler
 
-  /*  dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
-    for(i = 0; i < 5 * 1024; i++){
-      if(i%32 == 0)
-	printf("time:%llu virt_addr:\n", *((uint64_t*) trans_page->start_virt_address + i/2));
-	}
-	exit(0);*/
+  /*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
+  for(i = 0; i < 5 * 1024; i++){
+    if(i%32 == 0)
+      printf("time:%llu virt_addr:p\n", *((uint64_t*) trans_page->start_virt_address + i/2), (uint64_t*) trans_page->start_virt_address + i/2);
+      }
+      exit(0);*/
   uint64_t* time1 = malloc(1000*sizeof(uint64_t));
   uint64_t** time_p = malloc(1000*sizeof(uint64_t*));
   uint32_t*  coun = malloc(1000*sizeof(uint32_t));
+  uint32_t* my_buffer = malloc(50*PAGE_SIZE);
   int z = 0;
   for(;;){
     int j;
@@ -398,7 +403,7 @@ main(int argc, char **argv)
     }
     
     //    if(x == NULL) printf("null\n");
-    //    printf("x %p, curr_p %p\n", x, curr_pointer);
+    printf("x %p, curr_p %p ", x, curr_pointer);
     //accessing memory
     //cycle, begin - curr_pointer, end - write_mem 
 
@@ -411,20 +416,48 @@ main(int argc, char **argv)
     //uint32_t b_a = bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE);
     //может и не совпадать
     uint32_t counter = (bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
-    //    printf("counter %#X\n", counter);      //main cycle
-    for(;counter > 0;counter--){//change this rule.
+    printf("counter %#X\n", counter);      //main cycle
+    for(;counter > 20;counter--){//change this rule.
 
       //printf("%p\n", curr_pointer);
       if ((((uint32_t) curr_pointer) - (uint32_t) trans_page->start_virt_address) %  (32*4) == 0){
 	//THIS IS TIME
-	curr_time = *(curr_pointer);
+	//	curr_time = *(curr_pointer);
+	
+	memcpy(&curr_time, curr_pointer, 8);
+	/*if((z > 0) &&(curr_time < time1[z-1])) {
+	  /*for(j = 0; j >= -1; j--){
+	    //x = mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
+	    x = (void*) mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);//What i
+	    //      if(x == ((PCM_BASE | 0x7e000000) + 0x04))
+	    if(x != NULL) {
+	      break;}
+	      }
+	  dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
+	  printf("time %u at adress %p when x is %p\n", curr_time, curr_pointer, x);
+	    for(i = 0; i < 5 * 1024; i++){
+	      if(i%32 == 0)
+		printf("time:%llu virt_addr:%p\n", *((uint64_t*) trans_page->start_virt_address + i/2), (uint64_t*) trans_page->start_virt_address + i/2);
+	    }
+	    exit(0);}*/
+	    
+	//	memcpy(my_buffer, trans_page->start_virt_address, 5*PAGE_SIZE);
 	time_p[z] = (uint64_t*) curr_pointer;
-	time1[z] = curr_time;
+	memcpy(&time1[z], curr_pointer, 8);
+	//	time1[z] = curr_time;
+
 	coun[z] = counter;
+	//	memcpy~~
 	//	coun[z] = counter;
 	z++;
+	/*for(i = 0; i < 5 * 1024; i++)
+	  if(i % 32 == 0){
+	    printf("%d my_beff\n", *(my_buffer + i));
+	 }
+	//my_buffer += 5*1024;
+	if(z == 10) exit(0);*/
 	//printf("time %x at adress %p when x is %p\n", curr_time, curr_pointer, x);
-	 if(z == 1000) {z = 0;
+	 if(z == 1000 ) {z = 0;
 	   for (i = 0; i < 1000; i++) printf(" pointer %p time %lld counter %x\n", time_p[i], time1[i], coun[i]);
 	 }
    	curr_pointer+=2;
@@ -442,7 +475,7 @@ main(int argc, char **argv)
       //      printf("x: %p p: %p\n", x, curr_pointer);
     }
     //    dma_reg[DMA_CS] |= 0x1; Переход в цикле! Переход в цикле! Переход в ЦИКЛЕЕЕЕЕ
-    udelay(100);
+    udelay(1000);
   }
   /*void* x;
   for(i = 0; i < 3; i++){
