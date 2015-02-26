@@ -121,16 +121,19 @@ static volatile uint32_t *clk_reg;
 static volatile uint32_t *dma_reg;
 static volatile uint32_t *gpio_reg;
 static volatile uint32_t* destination;
+static volatile memory_table_t* trans_page;// = mt_init(5); 
+static volatile memory_table_t* con_blocks;
+
 
 static int delay_hw = DELAY_VIA_PWM;
 
 // Sets a GPIO to either GPIO_MODE_IN(=0) or GPIO_MODE_OUT(=1)
 
-static memory_table_t* mt_init(uint32_t page_count)
+static memory_table_t* mt_init(uint32_t page_count, int file, int fdMem)
 {
-  int i, fdMem;
+  int i;
 
-  if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
+  /*  if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
     {
       fprintf(stderr,
 	            "\n" \
@@ -139,56 +142,54 @@ static memory_table_t* mt_init(uint32_t page_count)
 	            "|Try running as root, e.g. precede the command with sudo. |\n" \
 	      "+---------------------------------------------------------+\n\n");
       exit(-1);
-    }
+      }*/
  
 
   memory_table_t* memory_table = malloc(sizeof(memory_table_t));
-  //  printf("asdfasdfasdfffffffffffffffffffffffffffff\n");
   memory_table->virt_pages = malloc(page_count * sizeof(void*));
   memory_table->phys_pages = malloc(page_count * sizeof(void*));
   memory_table->page_count = page_count;
                                      
   //Magic to determine the physical address for this page:                                                                                     
   uint64_t pageInfo;
-  int file = open("/proc/self/pagemap", 'r');////
+  //  int file = open("/proc/self/pagemap", 'r');////
   for(i = 0; i < page_count; i++)
     {
-      memory_table->virt_pages[i] = mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED, -1, 0);
-      printf("virt %p\n", memory_table->virt_pages[i]);
-      mlock(memory_table->virt_pages[i], PAGE_SIZE);
-      memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
-      //      munmap(memory_table->virt_pages[i], PAGE_SIZE);
-      //      free(memory_table->virt_pages[i]);
+      memory_table->virt_pages[i]  =  mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
+      //printf("virt pages %p\n", memory_table->virt_pages[i]);
+      memory_table->virt_pages[i] = valloc(PAGE_SIZE);
+      //mlock(memory_table->virt_pages[i], PAGE_SIZE);
+      //munmap(memory_table->virt_pages[i], PAGE_SIZE);
+      //memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
     }
+
   for(i = 0; i < page_count; i++)
     {
-      //memory_table->virt_pages[i] = mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE,MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED, -1, 0);
-      //printf("virt %p\n", memory_table->virt_pages[i]);
-      munmap(memory_table->virt_pages[i], PAGE_SIZE);
-      //      free(memory_table->virt_pages[i]);
-    }
-  lseek(file, ((uint32_t)memory_table->virt_pages[0])/PAGE_SIZE*8, SEEK_SET);
-  for(i = 0; i < page_count; i++)
-    {
-      read(file, &pageInfo, 8);
-      //      printf("pageinfo %#X\n", pageInfo);
+      //memory_table->virt_pages[i]  =  mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
+      //      memory_table->virt_pages[i] = valloc(PAGE_SIZE);
+      //mlock(memory_table->virt_pages[i], PAGE_SIZE);
+      lseek(file, ((uint32_t)memory_table->virt_pages[i])/PAGE_SIZE*8, SEEK_SET);
+      read(file, &pageInfo, 8); 
       memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-      /*if(i>1) if(memory_table->phys_pages[i] == memory_table->phys_pages[i-1])
-		{
-		  read(file, &pageInfo, 8);
-		  memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-		  }*/
-      memory_table->virt_pages[i]  =  mmap(memory_table->virt_pages[i], PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED|MAP_NORESERVE|MAP_LOCKED,fdMem, (void*)((uint32_t)memory_table->phys_pages[i] | 0x40000000));
-      printf("2124124124124124\n");
       
+      
+      //     memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
+    }
+
+
+  for(i = 0; i < page_count; i++)
+    {
+      munmap(memory_table->virt_pages[i], PAGE_SIZE);
+      memory_table->virt_pages[i]  =  mmap(memory_table->virt_pages[i], PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED|MAP_NORESERVE|MAP_LOCKED,fdMem, (void*)((uint32_t)memory_table->phys_pages[i] | 0x40000000));
+      //mlock(memory_table->virt_pages[i], PAGE_SIZE);
       //       memory_table->start_virt_address = (void*)( (uint32_t)memory_table->start_virt_address + PAGE_SIZE);
     }
   //  memory_table->start_virt_address = (void*)( (uint32_t)memory_table->start_virt_address - page_count*PAGE_SIZE);
-  close(file);
+  //close(file);
   printf("asdfasdfasdf\n");
   //  ((int*)memory_table->start_virt_address)[0] = 1;
   memory_table->curr_counter = 0;
-  close(fdMem);
+  //close(fdMem);
   for(i = 0; i < page_count; i++)
     {
       printf("virt %p phys %p\n", memory_table->virt_pages[i], memory_table->phys_pages[i]);
@@ -216,11 +217,12 @@ static void* mt_get_phys_addr(volatile memory_table_t* memory_table, void* virt_
 
 static void* mt_get_virt_addr(volatile memory_table_t* memory_table, void* phys_addr)
 {
-  printf("phys addr %p\n", phys_addr);
+  //  printf("phys addr %p\n", phys_addr);
   int i;
   phys_addr = (void*)((uint32_t) phys_addr & 0xbfffffff);
   for(i = 0; i < memory_table->page_count; i++)
     {
+      //  printf("mem table ph addr %p page count %u\n", memory_table->phys_pages[i], memory_table->page_count);
       if ((uint32_t) memory_table->phys_pages[i] == (((uint32_t) phys_addr) & 0xFFFFF000)){
 	return (void*) ((uint32_t) memory_table->virt_pages[i] + ((uint32_t) phys_addr & 0xFFF));
       }
@@ -307,7 +309,6 @@ static uint32_t* get_buf_addr(uint32_t *address, void* buf_adress, uint32_t buf_
 //Method to init DMA control block
 static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
 {
-  //  if((mode == 0xb000c1ff) || (source == 0xb000c1ff) ||(dest == 0xb000c1ff) ||(length == 0xb000c1ff) ||(stride == 0xb000c1ff) ||(next_cb == 0xb000c1ff)) printf("FUCKING SHEET, I DON't KNOW WHAT IS IT!\n");
   (*cbp)->info = mode;
   (*cbp)->src = source;
   (*cbp)->dst = dest;
@@ -339,7 +340,6 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
       //Transfer timer every 25th sample
       if(i % 30 == 0){
 	dest = mt_next(mem_table, sizeof(uint64_t));
-
 	//	printf("dest dest %p and phys dest %p\n", dest, mt_get_phys_addr(mem_table, dest));
 	if(dest == NULL)
 	  {
@@ -348,7 +348,6 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
 	  }
 
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_addr(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
-        printf("current %p virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp, cbp + 1, cbp->next, dest, cbp->dst);
 	cbp = mt_next(con_blocks, sizeof(dma_cb_t));
       }
       // Transfer GPIO
@@ -360,13 +359,13 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
 	}
 
       init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
-      //      printf("current %p virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp, cbp + 1, cbp->next, dest, cbp->dst);
+      //      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
       cbp = mt_next(con_blocks, sizeof(dma_cb_t));
       cbp_next = mt_next(con_blocks, 0);
       if(cbp_next == NULL)
 	{
 	  mt_restart(con_blocks);
-	  cbp_next = mt_next(con_blocks, sizeof(dma_cb_t));
+	  cbp_next = mt_next(con_blocks, 0);
 	}
       /*if(cbp == NULL)
 	{
@@ -377,7 +376,6 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp_next));
       else
 	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
-      //      printf("current %p virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp, cbp + 1, cbp->next, dest, cbp->dst);
       cbp = mt_next(con_blocks, sizeof(dma_cb_t));
       /*      if(cbp == NULL)
 	      {
@@ -454,6 +452,44 @@ uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
   else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
 }
 
+
+void init_buffer()
+{
+  int i, fdMem;
+
+  if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
+    {
+      fprintf(stderr,
+	            "\n" \
+	            "+---------------------------------------------------------+\n" \
+	            "|Sorry, you don't have permission to run this program.    |\n" \
+	            "|Try running as root, e.g. precede the command with sudo. |\n" \
+	      "+---------------------------------------------------------+\n\n");
+      exit(-1);
+    }
+
+  int file = open("/proc/self/pagemap", 'r');////
+
+  trans_page = mt_init(5, file, fdMem); 
+  close(file);
+  close(fdMem);
+
+  if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
+    {
+      fprintf(stderr,
+	            "\n" \
+	            "+---------------------------------------------------------+\n" \
+	            "|Sorry, you don't have permission to run this program.    |\n" \
+	            "|Try running as root, e.g. precede the command with sudo. |\n" \
+	      "+---------------------------------------------------------+\n\n");
+      exit(-1);
+    }
+  file = open("/proc/self/pagemap", 'r');////
+  con_blocks = mt_init(305, file, fdMem);
+  close(file);
+  close(fdMem);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -486,9 +522,10 @@ main(int argc, char **argv)
   uint32_t* my_buffer = malloc(50*PAGE_SIZE);
   int z = 0;
 
-  volatile memory_table_t* trans_page = mt_init(20); 
-  volatile memory_table_t* con_blocks = mt_init(305);
+  //  volatile memory_table_t* trans_page = mt_init(5); 
+  //  volatile memory_table_t* con_blocks = mt_init(305);
   //  printf("con_blocks count %u\n", con_blocks->page_count);
+  init_buffer(); 
 
   //  printf("%p\n", *con_blocks->phys_pages);//HERE IS NILL
 
@@ -496,18 +533,25 @@ main(int argc, char **argv)
 
   init_ctrl_data(trans_page, con_blocks);
 
-  init_hardware((uint32_t) *con_blocks->phys_pages);
-  // for(z = 0; z < 500; z++)
-  // printf("dma conblck %p\n", dma_reg[DMA_CONBLK_AD]);
+  init_hardware((uint32_t) *con_blocks->phys_pages | 0x40000000);
+  for(z = 0; z < 500; z++)
+    printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  /* printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);*/
 
   udelay(300000);
   //  sleep(1);
-  //  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
-  printf("virt pages 21 %p\n", ((dma_cb_t*)con_blocks->virt_pages[21])->next);
+  printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
+
   uint32_t curr_signal = 0, last_signal = 0;
   uint32_t curr_time;
   //sighandler
-  if((dma_reg[DMA_CS] & 0x1) == 1) printf("dma is working. another trouble trouble\n");
+
   /*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
   for(i = 0; i < 5 * 1024; i++){
     if(i%32 == 0)
@@ -525,10 +569,9 @@ main(int argc, char **argv)
     //uint64_t curr_time;
     //    printf("ad%p\n", dma_reg[0]);
     //    printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
-    printf("dma conblck %p\n", dma_reg[DMA_CONBLK_AD]);
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
-    printf("ad %p, ad next conblk %p\n", ad, ad->next);
-    for(j = 2; j >= -2; j--){
+    printf("ad %p\n", ad);
+    for(j = 1; j >= -1; j--){
       //x = mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
       x = mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);//What i
       //      if(x == ((PCM_BASE | 0x7e000000) + 0x04))
