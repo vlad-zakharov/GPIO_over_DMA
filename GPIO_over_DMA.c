@@ -153,26 +153,27 @@ static memory_table_t* mt_init(uint32_t page_count, int file, int fdMem)
   //Magic to determine the physical address for this page:                                                                                     
   uint64_t pageInfo;
   //  int file = open("/proc/self/pagemap", 'r');////
+  void* shlyapa = mmap(0, page_count*PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
   for(i = 0; i < page_count; i++)
     {
       memory_table->virt_pages[i]  =  mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
       //printf("virt pages %p\n", memory_table->virt_pages[i]);
-      memory_table->virt_pages[i] = valloc(PAGE_SIZE);
+      //memory_table->virt_pages[i] = valloc(PAGE_SIZE);
       //mlock(memory_table->virt_pages[i], PAGE_SIZE);
-      //munmap(memory_table->virt_pages[i], PAGE_SIZE);
-      //memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
-    }
 
+      //memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
+      }
+  lseek(file, ((uint32_t)shlyapa)/PAGE_SIZE*8, SEEK_SET);
   for(i = 0; i < page_count; i++)
     {
       //memory_table->virt_pages[i]  =  mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
       //      memory_table->virt_pages[i] = valloc(PAGE_SIZE);
       //mlock(memory_table->virt_pages[i], PAGE_SIZE);
-      lseek(file, ((uint32_t)memory_table->virt_pages[i])/PAGE_SIZE*8, SEEK_SET);
+
+
       read(file, &pageInfo, 8); 
       memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-      
-      
+      //munmap(memory_table->virt_pages[i], PAGE_SIZE);
       //     memset(memory_table->virt_pages[i], 0, PAGE_SIZE); //zero-fill the page for convenience                                   
     }
 
@@ -190,10 +191,10 @@ static memory_table_t* mt_init(uint32_t page_count, int file, int fdMem)
   //  ((int*)memory_table->start_virt_address)[0] = 1;
   memory_table->curr_counter = 0;
   //close(fdMem);
-  /*  for(i = 0; i < page_count; i++)
+  for(i = 0; i < page_count; i++)
     {
       printf("virt %p phys %p\n", memory_table->virt_pages[i], memory_table->phys_pages[i]);
-      }*/
+    }
   return memory_table;
 
 }
@@ -337,14 +338,14 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
   uint32_t phys_fifo_addr, i;
   uint32_t dest = 0;
   dma_cb_t* cbp = 0;
-  dma_cb_t* cbp_next;
+  dma_cb_t* cbp_curr;
  
   if (delay_hw == DELAY_VIA_PWM)
     phys_fifo_addr = (PWM_BASE | 0x7e000000) + 0x18;
   else
     phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
   
-  cbp = mt_next(con_blocks, sizeof(dma_cb_t));
+  //  cbp = mt_next(con_blocks, sizeof(dma_cb_t));
   //  dest = mt_next(mem_table, sizeof(uint64_t
 
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
@@ -360,46 +361,29 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
 	//   mt_restart(mem_table);
 	//   dest = mt_next(mem_table, sizeof(uint64_t));
 	//}
+	cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
 
-	init_dma_cb(&(dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_addr(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
+	init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
 	dest += 8;
-	cbp = mt_next(con_blocks, sizeof(dma_cb_t));
-      }
+	cbp++;
+      } 
       // Transfer GPIO
-      dest = mt_next(mem_table, sizeof(uint32_t));
-      if(dest == NULL)
-	{
-	  mt_restart(mem_table);
-	  dest = mt_next(mem_table, sizeof(uint32_t));
-	}
-
-      init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_addr(mem_table, dest), 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
+      cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
+      init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
       //      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
-      cbp = mt_next(con_blocks, sizeof(dma_cb_t));
-      cbp_next = mt_next(con_blocks, 0);
-      if(cbp_next == NULL)
-	{
-	  mt_restart(con_blocks);
-	  cbp_next = mt_next(con_blocks, 0);
-	}
-      /*if(cbp == NULL)
-	{
-	  cb
-	  }*/
+      dest += 4;
+      cbp++;
       // Delay
+      cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
       if (delay_hw == DELAY_VIA_PWM)
-	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, cbp_next));
+	init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(5), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
       else
-	init_dma_cb(&(cbp), DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t) mt_get_phys_addr(con_blocks, mt_next(con_blocks, 0)));
-      cbp = mt_next(con_blocks, sizeof(dma_cb_t));
-      /*      if(cbp == NULL)
-	      {
-	        mt_restart();
-		}*/
-      
+	init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
+      cbp++;
     }
-  /*  cbp--;
-      cbp->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->virt_pages[0]);*/
+
+  cbp--;
+  ((dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t)cbp))->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->virt_pages[0]);
 }
 
 // Initialize PWM (or PCM) and DMA
@@ -486,7 +470,7 @@ void init_buffer()
   int file = open("/proc/self/pagemap", 'r');////
 
   trans_page = mt_init(20, file, fdMem); 
-  /*close(file);
+  close(file);
   close(fdMem);
 
   if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
@@ -499,7 +483,7 @@ void init_buffer()
 	      "+---------------------------------------------------------+\n\n");
       exit(-1);
     }
-    file = open("/proc/self/pagemap", 'r');*/
+    file = open("/proc/self/pagemap", 'r');
   con_blocks = mt_init(305, file, fdMem);
   close(file);
   close(fdMem);
@@ -551,6 +535,7 @@ main(int argc, char **argv)
   init_ctrl_data(trans_page, con_blocks);
 
   init_hardware((uint32_t) *con_blocks->phys_pages | 0x40000000);
+
   //  for(z = 0; z < 500; z++) printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
   /* printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
   printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
@@ -565,7 +550,7 @@ main(int argc, char **argv)
   printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
 
   uint32_t curr_signal = 0, last_signal = 0;
-  uint32_t curr_time;
+  uint64_t curr_time;
   //sighandler
 
   /*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop
@@ -576,7 +561,7 @@ main(int argc, char **argv)
       exit(0);*/
 
 
-
+  z = 0;
 
   for(;;){
     int j;
@@ -586,16 +571,16 @@ main(int argc, char **argv)
     //    printf("ad%p\n", dma_reg[0]);
     //    printf("dma conblk %p\n", dma_reg[DMA_CONBLK_AD]);
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
-    printf("ad %p\n", ad);
+    //printf("ad %p\n", ad);
     for(j = 1; j >= -1; j--){
       //x = mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
-          printf("dst %p\n", (void*) (ad + j)->dst);
+      //          printf("dst %p\n", (void*) (ad + j)->dst);
       x = mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);//What i
       //      if(x == ((PCM_BASE | 0x7e000000) + 0x04))
       if(x != NULL) {
 	break;}
     }
-    printf("x %p\n", x);
+    //printf("x %p\n", x);
     //    if(x == NULL) printf("null\n");
     //printf("x %p, curr_p %p ", x, curr_pointer);
     //accessing memory
@@ -609,10 +594,10 @@ main(int argc, char **argv)
     //dma_reg[DMA_CS] &= 0xFFFFFFFE;
     //uint32_t b_a = bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE);
     //может и не совпадать
-    uint32_t counter = (bytes_available(mt_get_virt_from_pointer(trans_page, curr_pointer), x, trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
-    printf("%x\n", counter);
+    uint32_t counter;// = (bytes_available(mt_get_virt_from_pointer(trans_page, curr_pointer), x, trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
+    //printf("%x\n", counter);
     //printf("counter %#X\n", counter);      //main cycle
-    for(;counter > 10;counter--){//change this rule.
+    for(counter = 2000;counter > 10;counter--){//change this rule.
       //printf("%p\n", curr_pointer);
       if (curr_pointer %  (32*4) == 0){
 	//THIS IS TIME
@@ -620,7 +605,7 @@ main(int argc, char **argv)
 	
 	//memcpy(&curr_time, curr_pointer, 8);
 	curr_time = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-	printf("time time %u pointer %p\n", curr_time, curr_pointer);
+	//printf("time time %u pointer %p\n", curr_time, curr_pointer);
 	//	curr_time = *(uint64_t*) curr_pointer;
 	
 
@@ -645,10 +630,10 @@ main(int argc, char **argv)
 	    
 	//memcpy(my_buffer, trans_page->start_virt_address, 5*PAGE_SIZE);
 	time_p[z] = curr_pointer;
-	memcpy(&time1[z], &curr_time, 8);
+	time1[z] = curr_time;
 	//time1[z] = curr_time;
-	xx[z] = x;
-	coun[z] = counter;
+	//xx[z] = x;
+	//coun[z] = counter;
 	//memcpy~~
 	//coun[z] = counter;
 	z++;
@@ -666,8 +651,10 @@ main(int argc, char **argv)
 	        printf("time:%llu virt_addr:%p\n", *((uint64_t*) trans_page->start_virt_address + i/2), (uint64_t*) trans_page->start_virt_address + i/2);
 		}
 		exit(0);*/
-	if(z == 1000 ) {z = 0;
-	  for (i = 0; i < 1000; i++) printf("z1000 pointer %p time %lld counter %x x %p\n", time_p[i], time1[i], coun[i], xx[i]);
+	if(z == 1000 ) 
+	  {
+	    z = 0;
+	    for (i = 0; i < 1000; i++) printf("time %llu pointer %p\n", time1[i], time_p[i]);
 	}
 	curr_pointer+=8;
 	counter-=2;
