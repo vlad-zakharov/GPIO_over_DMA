@@ -257,7 +257,18 @@ static void* mt_get_phys_from_pointer(volatile memory_table_t* mt, uint32_t poin
   return mt->phys_pages[(uint32_t) pointer / 4096] + pointer % 4096;
 }
 
-
+static int32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr)
+{
+  int i;
+  //phys_addr = (void*)((uint32_t) phys_addr & 0xbfffffff);
+  for(i = 0; i < mt->page_count; i++)
+    {
+      if ((uint32_t) mt->virt_pages[i] == (((uint32_t) virt_addr) & 0xFFFFF000)){
+	return i*PAGE_SIZE + (uint32_t) virt_addr & 0xFFF;
+      }
+    }
+  return -1;
+}
 //static void* mt_type_inc(volatile memory_table_t*, void* pointer
 
 static void mt_restart(volatile memory_table_t* memory_table)
@@ -594,17 +605,19 @@ main(int argc, char **argv)
     //dma_reg[DMA_CS] &= 0xFFFFFFFE;
     //uint32_t b_a = bytes_available(curr_pointer, x, trans_page->page_count * PAGE_SIZE);
     //может и не совпадать
-    uint32_t counter;// = (bytes_available(mt_get_virt_from_pointer(trans_page, curr_pointer), x, trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
-    //printf("%x\n", counter);
+    uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
+    printf("%x\n", counter);
     //printf("counter %#X\n", counter);      //main cycle
-    for(counter = 2000;counter > 10;counter--){//change this rule.
+    for(;counter > 10;counter--){//change this rule.
       //printf("%p\n", curr_pointer);
       if (curr_pointer %  (32*4) == 0){
 	//THIS IS TIME
 	//curr_time = *(curr_pointer);
 	
 	//memcpy(&curr_time, curr_pointer, 8);
+	//	printf("CURRR_POINTER %p\n", curr_pointer);
 	curr_time = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+	//	printf("CURRR_POINTER %p\n", curr_pointer);
 	//printf("time time %u pointer %p\n", curr_time, curr_pointer);
 	//	curr_time = *(uint64_t*) curr_pointer;
 	
@@ -651,10 +664,10 @@ main(int argc, char **argv)
 	        printf("time:%llu virt_addr:%p\n", *((uint64_t*) trans_page->start_virt_address + i/2), (uint64_t*) trans_page->start_virt_address + i/2);
 		}
 		exit(0);*/
-	if(z == 1000 ) 
+	if(z == 2000 ) 
 	  {
 	    z = 0;
-	    for (i = 0; i < 1000; i++) printf("time %llu pointer %p\n", time1[i], time_p[i]);
+	    for (i = 0; i < 2000; i++) printf("time %llu pointer %p and pointer pointer %p\n", time1[i], time_p[i], &time_p[i]);
 	}
 	curr_pointer+=8;
 	counter-=2;
