@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <assert.h>
 
 // 8 GPIOs to use for driving servos
 static uint8_t gpio_list[] = {
@@ -360,7 +361,7 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
   //  dest = mt_next(mem_table, sizeof(uint64_t
 
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
-  for (i = 0; i < 19200; i++) 
+  for (i = 0; i < 3840; i++) 
     {
       //printf("i %d\n", i);
       //Transfer timer every 25th sample
@@ -381,7 +382,8 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
       // Transfer GPIO
       cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
       init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
-      //      printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp + 1, cbp->next, dest, cbp->dst);
+      //      printf("ERROR\n");
+      //  printf("virt_con_next %#x, phys_con_next %#x, virt_dest %#x, phys_dest %#x\n", cbp_curr + 1, cbp_curr->next, mt_get_virt_from_pointer(mem_table, dest), cbp_curr->dst);
       dest += 4;
       cbp++;
       // Delay
@@ -395,6 +397,7 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
 
   cbp--;
   ((dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t)cbp))->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->virt_pages[0]);
+  //  printf("virt_con_next %#x, phys_con_next %#x\n", cbp_curr + 1, cbp_curr->next);
 }
 
 // Initialize PWM (or PCM) and DMA
@@ -480,7 +483,7 @@ void init_buffer()
 
   int file = open("/proc/self/pagemap", 'r');////
 
-  trans_page = mt_init(20, file, fdMem); 
+  trans_page = mt_init(4, file, fdMem); 
   close(file);
   close(fdMem);
 
@@ -495,7 +498,7 @@ void init_buffer()
       exit(-1);
     }
     file = open("/proc/self/pagemap", 'r');
-  con_blocks = mt_init(305, file, fdMem);
+  con_blocks = mt_init(61, file, fdMem);
   close(file);
   close(fdMem);
 }
@@ -650,24 +653,13 @@ main(int argc, char **argv)
 	//memcpy~~
 	//coun[z] = counter;
 	z++;
-	/*for(i = 0; i < 5 * 1024; i++)
-	    if(i % 32 == 0){
-	        printf("%d my_beff\n", *(my_buffer + i));
-		 }
-		 //my_buffer += 5*1024;
-		 if(z == 10) exit(0);*/
-	//printf("time %x at adress %p when x is %p\n", curr_time, curr_pointer, x);
-	/*dma_reg[DMA_CS] &= 0xFFFFFFFE;    // stop    
-	  printf("time %llu at adress %p when x is %p\n", *((uint64_t*)&curr_time), curr_pointer, x);
-	  for(i = 0; i < 5 * 1024; i++){
-	    if(i%32 == 0)
-	        printf("time:%llu virt_addr:%p\n", *((uint64_t*) trans_page->start_virt_address + i/2), (uint64_t*) trans_page->start_virt_address + i/2);
-		}
-		exit(0);*/
 	if(z == 2000 ) 
 	  {
 	    z = 0;
-	    for (i = 0; i < 2000; i++) printf("time %llu pointer %p and pointer pointer %p\n", time1[i], time_p[i], &time_p[i]);
+	    assert(time_p != NULL);
+
+	    for (i = 0; i < 2000; i++) printf("time %llx pointer %p and pointer pointer %p\n", time1[i], time_p, time_p);
+	    printf("pointer %p\n", time_p);
 	}
 	curr_pointer+=8;
 	counter-=2;
