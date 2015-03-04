@@ -118,6 +118,10 @@ typedef struct {
   uint32_t page_count;
 } memory_table_t;
 
+unsigned int ppmSyncLength     = 4000;   // Length of PPM sync pause
+unsigned int ppmChannelsNumber = 8;      // Number of channels packed in PPM
+
+
 static volatile uint32_t *pwm_reg;
 static volatile uint32_t *pcm_reg;
 static volatile uint32_t *clk_reg;
@@ -393,7 +397,7 @@ void init_buffer()
 
 void* signal_processing(void* arg)
 {
-  uint32_t curr_pointer = 0, first_change = 1, prev_tick = 0;
+  uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1;
   uint64_t* time1 = malloc(2000*sizeof(uint64_t));
   uint32_t* time_p = malloc(2000*sizeof(uint64_t));
   void** xx = malloc(2000*sizeof(void*));
@@ -402,7 +406,7 @@ void* signal_processing(void* arg)
   int z = 0;
   int i;
 
-  uint32_t curr_signal = 0, last_signal = 0;
+  uint32_t curr_signal = 0, last_signal = 0, counter2 = 0;
   uint64_t curr_tick;
   //sighandler
 
@@ -444,12 +448,13 @@ void* signal_processing(void* arg)
 	counter-=2;
       }
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      //      printf("curr /
       if(curr_signal != last_signal){
-	printf("SIG CHANGED AT %llu\n", curr_tick);
+	//	printf("SIG CHANGED AT %llu\n", curr_tick);
 	if(!first_change)
 	  {
-	    printf("Level %u for %u us.\n", curr_signal?0:1, curr_tick - prev_tick);
+	    //printf
+	    time1[counter2] = curr_tick - prev_tick;
+	    counter2++;
 	    prev_tick = curr_tick;
 	  }
 	else
@@ -462,9 +467,23 @@ void* signal_processing(void* arg)
       }
       else last_signal = curr_signal;
       curr_pointer+=4;
-      if(curr_pointer >= trans_page->page_count*PAGE_SIZE) curr_pointer = 0;
+      if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
+	{
+	  //printf("%x\n", counter);
+	  curr_pointer = 0;
+	  //	      counter2 = 0;
+	}
+      curr_tick++;
     }
-    usleep(2000);
+    usleep(5000);
+    if(counter2 >= 200)
+      {
+	for(i = 0; i < counter2; i++)
+	  {
+	    printf("length %llu\n", time1[i]);
+	  }
+	counter2 = 0;
+      }
   }
 }
 
