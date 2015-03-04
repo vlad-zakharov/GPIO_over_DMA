@@ -379,7 +379,6 @@ init_hardware(uint32_t physCb)
 
 uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
 {
-  printf("read_addr %p, write_addr %p\n", read_addr, write_addr);
   if( write_addr > read_addr ) return ((uint32_t) write_addr - (uint32_t) read_addr);
   else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
 }
@@ -394,7 +393,7 @@ void init_buffer()
 
 void* signal_processing(void* arg)
 {
-  uint32_t curr_pointer = 0;
+  uint32_t curr_pointer = 0, first_change = 1, prev_tick = 0;
   uint64_t* time1 = malloc(2000*sizeof(uint64_t));
   uint32_t* time_p = malloc(2000*sizeof(uint64_t));
   void** xx = malloc(2000*sizeof(void*));
@@ -404,7 +403,7 @@ void* signal_processing(void* arg)
   int i;
 
   uint32_t curr_signal = 0, last_signal = 0;
-  uint64_t curr_time;
+  uint64_t curr_tick;
   //sighandler
 
   z = 0;
@@ -420,14 +419,13 @@ void* signal_processing(void* arg)
       if(x != NULL) {
 	break;}
     }
-    //    printf("x %p and pointer x %p\n", x, mt_get_pointer_from_virt(trans_page, (void*)x));
+
     uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
-    printf("%x\n", counter);
     for(;counter > 10;counter--){
       if (curr_pointer %  (32*4) == 0){
-	curr_time = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-	time_p[z] = curr_pointer;
-	time1[z] = curr_time;
+	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+	/*	time_p[z] = curr_pointer;
+	time1[z] = curr_tick;
 	coun[z] = counter;
 	xx[z] = mt_get_pointer_from_virt(trans_page, (void*)x);
 	z++;
@@ -441,20 +439,32 @@ void* signal_processing(void* arg)
 		printf("time %llu pointer %p counter %u x %p\n", time_p[i], time1[i], coun[i], xx[i]);
 	      }
 	    printf("pointer %p\n", time_p);
-	  }
+	    }*/
 	curr_pointer+=8;
 	counter-=2;
       }
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
+      //      printf("curr /
       if(curr_signal != last_signal){
-	printf("SIG CHANGED AT %llu\n", curr_time);
+	printf("SIG CHANGED AT %llu\n", curr_tick);
+	if(!first_change)
+	  {
+	    printf("Level %u for %u us.\n", curr_signal?0:1, curr_tick - prev_tick);
+	    prev_tick = curr_tick;
+	  }
+	else
+	  {
+	    first_change = 0;
+	    prev_tick = curr_tick;
+	  }
+	  
 	last_signal = curr_signal;
       }
       else last_signal = curr_signal;
       curr_pointer+=4;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE) curr_pointer = 0;
     }
-    usleep(200);
+    usleep(2000);
   }
 }
 
@@ -463,7 +473,6 @@ main(int argc, char **argv)
 {
   mlockall(MCL_CURRENT|MCL_FUTURE);
   int i;
-  destination = (uint32_t*) malloc(PAGE_SIZE);
 
   dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
   pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
@@ -484,12 +493,12 @@ main(int argc, char **argv)
   pthread_attr_t thread_attr;
   struct sched_param param;
   memset(&param, 0, sizeof(param));
-
+  
   pthread_attr_init(&thread_attr);
   param.sched_priority = 99;
   (void)pthread_attr_setschedparam(&thread_attr, &param);
   pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
-
+  
   pthread_create(&_signal_handler, &thread_attr, &signal_processing , NULL);
   while(1);
   return 0;
