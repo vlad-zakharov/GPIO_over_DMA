@@ -397,7 +397,8 @@ void init_buffer()
 
 void* signal_processing(void* arg)
 {
-  uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1;
+  uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
+  uint32_t channels[2048][8];
   uint64_t* time1 = malloc(2000*sizeof(uint64_t));
   uint32_t* time_p = malloc(2000*sizeof(uint64_t));
   void** xx = malloc(2000*sizeof(void*));
@@ -406,8 +407,8 @@ void* signal_processing(void* arg)
   int z = 0;
   int i;
 
-  uint32_t curr_signal = 0, last_signal = 0, counter2 = 0;
-  uint64_t curr_tick;
+  uint32_t curr_signal = 0, last_signal = 1488, counter2 = 0;
+  uint64_t curr_tick, delta_time = 0;
   //sighandler
 
   z = 0;
@@ -448,24 +449,48 @@ void* signal_processing(void* arg)
 	counter-=2;
       }
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      if(curr_signal != last_signal){
-	//	printf("SIG CHANGED AT %llu\n", curr_tick);
-	if(!first_change)
+      if(last_signal == 1488) last_signal = curr_signal;
+      if(curr_signal != last_signal)
+	if(curr_signal == 0)
 	  {
-	    //printf
-	    time1[counter2] = curr_tick - prev_tick;
-	    counter2++;
+	    delta_time = curr_tick - prev_tick;
 	    prev_tick = curr_tick;
-	  }
-	else
-	  {
-	    first_change = 0;
-	    prev_tick = curr_tick;
-	  }
 	  
-	last_signal = curr_signal;
-      }
-      else last_signal = curr_signal;
+	    if (delta_time >= ppmSyncLength) { // Sync
+	      curr_channel = 0;
+	      counter2++;
+	      // RC output
+	      /*for (int i = 0; i < ppmChannelsNumber; i++)
+		pwm->setPWMuS(i + 3, channels[i]); // 1st Navio RC output is 3*/
+
+	      // Console output
+	      /*	      printf("\n");
+	      for (i = 0; i < ppmChannelsNumber; i++)
+		channels[counter2++][
+		printf("%4.f ", channels[i]);*/
+	  
+	    }
+	    else
+	      if (curr_channel < ppmChannelsNumber)
+		channels[counter2][curr_channel++] = delta_time;
+	    //	printf("SIG CHANGED AT %llu\n", curr_tick);
+	    /*if(!first_change)
+	      {
+	      //printf
+
+	      time1[counter2] = curr_tick - prev_tick;
+	      counter2++;
+	      prev_tick = curr_tick;
+	      }
+	      else
+	      {
+	      first_change = 0;
+	      prev_tick = curr_tick;
+	      }*/
+	  
+	    last_signal = curr_signal;
+	  }
+	else last_signal = curr_signal;
       curr_pointer+=4;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
 	{
@@ -480,7 +505,11 @@ void* signal_processing(void* arg)
       {
 	for(i = 0; i < counter2; i++)
 	  {
-	    printf("length %llu\n", time1[i]);
+	    for(j = 0; j < 8; j++){
+	      //	      uint64_t
+	      printf("%u ", channels[i][j]);
+	    }
+	    printf("\n");
 	  }
 	counter2 = 0;
       }
