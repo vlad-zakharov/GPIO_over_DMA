@@ -131,6 +131,9 @@ static volatile uint32_t* destination;
 static volatile memory_table_t* trans_page;
 static volatile memory_table_t* con_blocks;
 pthread_t _signal_handler;
+pthread_attr_t thread_attr;
+struct sched_param param;
+
 
 
 static int delay_hw = DELAY_VIA_PWM;
@@ -451,52 +454,36 @@ void* signal_processing(void* arg)
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
       if(last_signal == 1488) last_signal = curr_signal;
       if(curr_signal != last_signal)
-	if(curr_signal == 0)
-	  {
-	    delta_time = curr_tick - prev_tick;
-	    prev_tick = curr_tick;
+	{
+	  delta_time = curr_tick - prev_tick;
+	  prev_tick = curr_tick;
+	  printf("delta time %u\n", delta_time);
+	  //	  channels[counter2++][0] = delta_time;
+	  /*	  if(curr_signal == 0)
+	    {
+	      
+	      delta_time = curr_tick - prev_tick;
+		prev_tick = curr_tick;
 	  
-	    if (delta_time >= ppmSyncLength) { // Sync
-	      curr_channel = 0;
-	      counter2++;
-	      // RC output
-	      /*for (int i = 0; i < ppmChannelsNumber; i++)
-		pwm->setPWMuS(i + 3, channels[i]); // 1st Navio RC output is 3*/
-
-	      // Console output
-	      /*	      printf("\n");
-	      for (i = 0; i < ppmChannelsNumber; i++)
-		channels[counter2++][
-		printf("%4.f ", channels[i]);*/
-	  
-	    }
-	    else
-	      if (curr_channel < ppmChannelsNumber)
+		if (delta_time >= ppmSyncLength) { // Sync
+		curr_channel = 0;
+		counter2++;
+		}
+		else
+		if (curr_channel < ppmChannelsNumber)
 		channels[counter2][curr_channel++] = delta_time;
-	    //	printf("SIG CHANGED AT %llu\n", curr_tick);
-	    /*if(!first_change)
-	      {
-	      //printf
-
-	      time1[counter2] = curr_tick - prev_tick;
-	      counter2++;
-	      prev_tick = curr_tick;
-	      }
-	      else
-	      {
-	      first_change = 0;
-	      prev_tick = curr_tick;
+	      
+	    }
+	  else 
+	    {
+	      //delta;
 	      }*/
-	  
-	    last_signal = curr_signal;
-	  }
-	else last_signal = curr_signal;
+	}
+      last_signal = curr_signal;
       curr_pointer+=4;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
 	{
-	  //printf("%x\n", counter);
 	  curr_pointer = 0;
-	  //	      counter2 = 0;
 	}
       curr_tick++;
     }
@@ -505,8 +492,7 @@ void* signal_processing(void* arg)
       {
 	for(i = 0; i < counter2; i++)
 	  {
-	    for(j = 0; j < 8; j++){
-	      //	      uint64_t
+	    for(j = 0; j < 1; j++){
 	      printf("%u ", channels[i][j]);
 	    }
 	    printf("\n");
@@ -538,12 +524,12 @@ main(int argc, char **argv)
 
   udelay(300000);
 
-  pthread_attr_t thread_attr;
-  struct sched_param param;
   memset(&param, 0, sizeof(param));
   
-  pthread_attr_init(&thread_attr);
+
   param.sched_priority = 99;
+  //  sched_setscheduler(0, SCHED_FIFO, &param);
+  pthread_attr_init(&thread_attr);
   (void)pthread_attr_setschedparam(&thread_attr, &param);
   pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
   
