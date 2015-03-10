@@ -1,3 +1,4 @@
+#include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
 #include "PCA9685.h"
@@ -30,6 +31,8 @@ static uint8_t gpio_list[] = {
   24,    // P1-18
   25,    // P1-22
 };
+
+#define DBG             0
 
 #define RT_PRIORITY
 
@@ -143,7 +146,8 @@ uint32_t channels[8];
 uint32_t counter2 = 0;
 pthread_t _signal_handler;
 pthread_t _output_thread;
-queue<uint32_t*> output_queue;
+queue<uint64_t> output_queue;
+uint64_t output_buffer[40000];
 
 
 //int 
@@ -418,11 +422,29 @@ void init_buffer()
   con_blocks = mt_init(305);
 }
 
+void stop_dma_and_exit()
+{
+  dma_reg[DMA_CS] = 0;    // stop dma 
+  exit(1);
+}
+
+void set_sigaction()
+{
+  for (int i = 0; i < 64; i++) 
+    { //catch all signals (like ctrl+c, ctrl+z, ...) to ensure DMA is disabled
+      struct sigaction sa;
+      memset(&sa, 0, sizeof(sa));
+      sa.sa_handler = stop_dma_and_exit;
+      sigaction(i, &sa, NULL);
+    }
+}
+
 
 void* signal_processing(void* arg)
 {
   uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
   uint64_t* time1 = malloc(2000*sizeof(uint64_t));
+  memset(output_buffer, 0, 40000*8);
   uint32_t* time_p = malloc(2000*sizeof(uint64_t));
   void** xx = malloc(2000*sizeof(void*));
   uint32_t*  coun = malloc(2000*sizeof(uint32_t));
@@ -471,72 +493,28 @@ void* signal_processing(void* arg)
 	counter-=2;
       }
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      if(last_signal == 1488) last_signal = curr_signal;
+      if(last_signal == 1488) {last_signal = curr_signal; prev_tick = curr_tick;}
       if(curr_signal != last_signal)
-	if(curr_signal == 0)
+	//	if(curr_signal == 0)
 	  {
 	    delta_time = curr_tick - prev_tick;
 	    prev_tick = curr_tick;
-	    //	    printf("delta_time is %u\n", delta_time);
+	    output_queue.push(delta_time);
+	    output_buffer[delta_time]++;
+#if(DBG)
+	    printf("delta_time is %llu\n", delta_time);
+#endif
 	      
-	    if (delta_time >= ppmSyncLength) { // Sync
-	      curr_channel = 0;
-	      output_queue.push(channels);
-	      //	      channels[counter2][curr_channel++] = delta_time;
-	      //	      counter2++;
-	      // RC output
-	      /*for (int i = 0; i < ppmChannelsNumber; i++)
-		pwm->setPWMuS(i + 3, channels[i]); // 1st Navio RC output is 3*/
-
-	      // Console output
-	      /*      printf("\n");
-		            for (i = 0; i < ppmChannelsNumber; i++)
-			    channels[counter2++][
-			    printf("%4.f ", channels[i]);*/
-	      
-	    }
-	    else
-	      if (curr_channel < ppmChannelsNumber)
-		channels[curr_channel++] = delta_time;
-	    //printf("SIG CHANGED AT %llu\n", curr_tick);
-	    /*if(!first_change)
-	      {
-	      //printf
-	      time1[counter2] = curr_tick - prev_tick;
-	      counter2++;
-	      prev_tick = curr_tick;
-	      }
-	      else
-	      {
-	      first_change = 0;
-	      prev_tick = curr_tick;
-	      }*/
-	    
-	    last_signal = curr_signal;
 	  }
-	else last_signal = curr_signal;
+      last_signal = curr_signal;
       curr_pointer+=4;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
 	{
-	  //printf("%x\n", counter);
 	  curr_pointer = 0;
-	  //      counter2 = 0;
 	}
       curr_tick++;
     }
-    usleep(5000);
-    /*    if(counter2 >= 200)
-      {
-	for(i = 0; i < counter2; i++)
-	  {
-	    for(j = 0; j < 8; j++){
-
-	      printf("%u ", channels[i][j]);
-	    }
-	    printf("\n");
-	  }
-	counter2 = 0;
-      }*/
+    usleep(10000);
   }
 }
 
@@ -546,33 +524,33 @@ void* output_thread(void* arg)
   int curr_count;
   while(1)
     {
-      if(!output_queue.empty())
+      while(!output_queue.empty())
 	{
-	  uint32_t* current;
+	  uint64_t current;
 	  current = output_queue.front();
-	  for(j = 0; j < 8; j++){
-	    printf("%u ", current[j]);
-	  }
-	  printf("\n");
-	  /*curr_count = counter2;
-	  counter2 = 0;
-	  for(i = 0; i < curr_counter; i++)
+	  output_queue.pop();
+	  //	  printf("%u ", current);
+	  //	  printf("\n");
+	  i++;
+	  if(i == 1000)
 	    {
-	  
-	      printf("\n");
+	      for(j = 0; j < 40000; j++){
+		if(output_buffer[j] != 0)
+		  printf("value %u count %u\n", j, output_buffer[j]);
+		i = 0;
+	      }
+	      
 	    }
-	    counter2 = 0;*/
+
 	}
-      //      udelay(50000);
+      usleep(200000);
     }
 }
-
 int
 main(int argc, char **argv)
 {
   mlockall(MCL_CURRENT|MCL_FUTURE);
   int i;
-
   dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
   pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
   pcm_reg = map_peripheral(PCM_BASE, PCM_LEN);
@@ -583,6 +561,7 @@ main(int argc, char **argv)
     gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
   }
 
+  set_sigaction();
   init_buffer(); 
   init_ctrl_data(trans_page, con_blocks);
   init_hardware((uint32_t) *con_blocks->phys_pages | 0x40000000);
@@ -593,12 +572,15 @@ main(int argc, char **argv)
   struct sched_param param, param2;
   memset(&param, 0, sizeof(param));
   
+  param.sched_priority = 10;
+  sched_setscheduler(0, SCHED_FIFO, &param);
+  
   pthread_attr_init(&thread_attr);
-  param.sched_priority = 99;
+  param.sched_priority = 98;
   (void)pthread_attr_setschedparam(&thread_attr, &param);
   pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
   
-  pthread_create(&_signal_handler, &thread_attr, &signal_processing , NULL);
+  pthread_create(&_signal_handler, NULL, &signal_processing , NULL);
   
   memset(&param2, 0, sizeof(param2));
   
@@ -607,7 +589,7 @@ main(int argc, char **argv)
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
   pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
-  while(1);
+  pthread_create(&_output_thread, NULL, &output_thread , NULL);
+  while(1) sleep(20);
   return 0;
 }
