@@ -32,7 +32,7 @@ static uint8_t gpio_list[] = {
   25,    // P1-22
 };
 
-#define DBG             0
+#define DBG             1
 
 #define RT_PRIORITY
 
@@ -145,8 +145,9 @@ static volatile memory_table_t* con_blocks;
 uint32_t channels[8];
 uint32_t counter2 = 0;
 pthread_t _signal_handler;
-pthread_t _output_thread;
+pthread_t _output_thread, _time_thread;
 queue<uint64_t> output_queue;
+queue<uint64_t> time_queue;
 uint64_t output_buffer[40000];
 
 
@@ -451,6 +452,10 @@ void* signal_processing(void* arg)
   uint32_t* my_buffer = malloc(50*PAGE_SIZE);
   int z = 0;
   int i;
+  
+  struct timeval curr_freq_tick;
+  struct timeval prev_freq_tick;
+  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
 
   uint32_t curr_signal = 0, last_signal = 1488;
   uint64_t curr_tick, delta_time = 0;
@@ -462,6 +467,11 @@ void* signal_processing(void* arg)
     int j;
     void* x;
 
+    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    //    curr_freq_tick = clock();
+    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
+    prev_freq_tick = curr_freq_tick;
+		    
     
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
     for(j = 1; j >= -1; j--){
@@ -501,10 +511,6 @@ void* signal_processing(void* arg)
 	    prev_tick = curr_tick;
 	    output_queue.push(delta_time);
 	    output_buffer[delta_time]++;
-#if(DBG)
-	    printf("delta_time is %llu\n", delta_time);
-#endif
-	      
 	  }
       last_signal = curr_signal;
       curr_pointer+=4;
@@ -514,7 +520,7 @@ void* signal_processing(void* arg)
 	}
       curr_tick++;
     }
-    usleep(10000);
+    udelay(10000);
   }
 }
 
@@ -546,9 +552,31 @@ void* output_thread(void* arg)
       usleep(200000);
     }
 }
+
+void* time_thread(void* arg)
+{
+  int i, j;
+  int curr_count;
+  while(1)
+    {
+      while(!time_queue.empty())
+	{
+	  uint64_t current;
+	  current = time_queue.front();
+	  time_queue.pop();
+	  printf("%llu\n", current);
+	  
+	}
+      usleep(200000);
+    }
+}
+
+
+
 int
 main(int argc, char **argv)
 {
+  //  printf("sizeof %zu", sizeof(suseconds_t));
   mlockall(MCL_CURRENT|MCL_FUTURE);
   int i;
   dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
@@ -576,11 +604,11 @@ main(int argc, char **argv)
   sched_setscheduler(0, SCHED_FIFO, &param);
   
   pthread_attr_init(&thread_attr);
-  param.sched_priority = 98;
+  param.sched_priority = 50;
   (void)pthread_attr_setschedparam(&thread_attr, &param);
   pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
   
-  pthread_create(&_signal_handler, NULL, &signal_processing , NULL);
+  pthread_create(&_signal_handler, &thread_attr, &signal_processing , NULL);
   
   memset(&param2, 0, sizeof(param2));
   
@@ -589,7 +617,18 @@ main(int argc, char **argv)
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
   pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  pthread_create(&_output_thread, NULL, &output_thread , NULL);
+  //  pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
+
+
+  memset(&param2, 0, sizeof(param2));
+  
+  pthread_attr_init(&thread_attr2);
+  param2.sched_priority = 1;
+  (void)pthread_attr_setschedparam(&thread_attr2, &param2);
+  pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
+  
+  //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
+
   while(1) sleep(20);
   return 0;
 }
