@@ -1,7 +1,7 @@
+#include "memory_table.hpp"
 #include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
-#include "PCA9685.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -32,13 +32,14 @@ static uint8_t gpio_list[] = {
   25,    // P1-22
 };
 
-#define DBG             1
+//#define DBG             1
 
 #define RT_PRIORITY
 
 #define NUM_GPIOS       (sizeof(gpio_list)/sizeof(gpio_list[0]))
-
+#ifndef PAGE_SIZE
 #define PAGE_SIZE            4096
+#endif
 
 // Memory Addresses
 #define DMA_BASE        0x20007000
@@ -118,20 +119,13 @@ typedef struct {
     stride, next, pad[2];
 } dma_cb_t;
 
-typedef struct {
-  void **virt_pages;
-  void **phys_pages;
-  uint32_t page_count;
-} memory_table_t;
-
-/*typedef struct {
-  void buffer[2048];
-  uint32_t *head[8];
-  uint32_t *tail[8];
-  } queue_t;*/
-
 unsigned int ppmSyncLength     = 4000;   // Length of PPM sync pause
 unsigned int ppmChannelsNumber = 8;      // Number of channels packed in PPM
+
+uint32_t buffer_length = 5; //buffer length divided by 16 kilobytes
+uint32_t proc_delay = 10000;
+uint32_t proc_priority = 99;
+uint32_t sample_freq = 1000; // could be 1, 2, 5, 10, 25, 50
 
 
 static volatile uint32_t *pwm_reg;
@@ -149,135 +143,6 @@ pthread_t _output_thread, _time_thread;
 queue<uint64_t> output_queue;
 queue<uint64_t> time_queue;
 uint64_t output_buffer[40000];
-
-
-//int 
-
-/*queue_t* q_init()
-{
-  queue_t* queue = malloc(sizeof(queue_t));
-  queue->head = queue->buffer + 1;
-  queue->tail = queue->buffer;
-}
-
-void* q_enqueue(queue_t* queue, */
-
-
-static int delay_hw = DELAY_VIA_PWM;
-
-// Sets a GPIO to either GPIO_MODE_IN(=0) or GPIO_MODE_OUT(=1)
-
-static memory_table_t* mt_init(uint32_t page_count)
-{
-  int i, fdMem, file;
-
-  if ((fdMem = open("/dev/mem", O_RDWR | O_SYNC) ) < 0)
-    {
-      fprintf(stderr,
-	            "\n" \
-	            "+---------------------------------------------------------+\n" \
-	            "|Sorry, you don't have permission to run this program.    |\n" \
-	            "|Try running as root, e.g. precede the command with sudo. |\n" \
-	      "+---------------------------------------------------------+\n\n");
-      exit(-1);
-    }
-
-  if ((file = open("/proc/self/pagemap", 'r') ) < 0)
-    {
-      fprintf(stderr,
-	            "\n" \
-	            "+---------------------------------------------------------+\n" \
-	            "|Sorry, you don't have permission to run this program.    |\n" \
-	            "|Try running as root, e.g. precede the command with sudo. |\n" \
-	      "+---------------------------------------------------------+\n\n");
-      exit(-1);
-    }
-
-  memory_table_t* memory_table = malloc(sizeof(memory_table_t));
-  memory_table->virt_pages = malloc(page_count * sizeof(void*));
-  memory_table->phys_pages = malloc(page_count * sizeof(void*));
-  memory_table->page_count = page_count;
-                                     
-  //Magic to determine the physical address for this page:                                                                                     
-  uint64_t pageInfo;
-
-  void* shlyapa = mmap(0, page_count*PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
-  for(i = 0; i < page_count; i++)
-    {
-      memory_table->virt_pages[i]  =  mmap(0, PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_ANONYMOUS|MAP_NORESERVE|MAP_LOCKED,-1,0);
-    }
-  lseek(file, ((uint32_t)shlyapa)/PAGE_SIZE*8, SEEK_SET);
-  for(i = 0; i < page_count; i++)
-    {
-      read(file, &pageInfo, 8); 
-      memory_table->phys_pages[i] = (void*)(uint32_t)(pageInfo*PAGE_SIZE);
-    }
-
-
-  for(i = 0; i < page_count; i++)
-    {
-      munmap(memory_table->virt_pages[i], PAGE_SIZE);
-      memory_table->virt_pages[i]  =  mmap(memory_table->virt_pages[i], PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED|MAP_NORESERVE|MAP_LOCKED,fdMem, (void*)((uint32_t)memory_table->phys_pages[i] | 0x40000000));
-    }
-  close(file);
-  close(fdMem);
-  return memory_table;
-
-}
-
-static void* mt_get_phys_addr(volatile memory_table_t* memory_table, void* virt_addr)
-{
-  int i;
-  for(i = 0; i < memory_table->page_count; i++)
-    {
-      if ((uint32_t) memory_table->virt_pages[i] == (((uint32_t) virt_addr) & 0xFFFFF000)){
-	return (void*) (((uint32_t) memory_table->phys_pages[i] + ((uint32_t) virt_addr & 0xFFF)) | 0x40000000);
-      }
-    }
-  return NULL;
-}
-
-static void* mt_get_virt_addr(volatile memory_table_t* memory_table, void* phys_addr)
-{
-  int i;
-  phys_addr = (void*)((uint32_t) phys_addr & 0xbfffffff);
-  for(i = 0; i < memory_table->page_count; i++)
-    {
-      if ((uint32_t) memory_table->phys_pages[i] == (((uint32_t) phys_addr) & 0xFFFFF000)){
-	return (void*) ((uint32_t) memory_table->virt_pages[i] + ((uint32_t) phys_addr & 0xFFF));
-      }
-    }
-  return NULL;
-}
-
-// This function returns virtual address with help of pointer, which is offset from the beginning of the buffer.
-static void* mt_get_virt_from_pointer(volatile memory_table_t* mt, uint32_t pointer)
-{
-  if(pointer >= PAGE_SIZE * mt->page_count) return NULL;
-  return mt->virt_pages[(uint32_t) pointer / 4096] + pointer % 4096;
-}
-
-static void* mt_get_phys_from_pointer(volatile memory_table_t* mt, uint32_t pointer)
-{
-  if(pointer >= PAGE_SIZE * mt->page_count) return NULL;
-  return mt->phys_pages[(uint32_t) pointer / 4096] + pointer % 4096;
-}
-
-static int32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr)
-{
-  int i;
-  //phys_addr = (void*)((uint32_t) phys_addr & 0xbfffffff);
-  for(i = 0; i < mt->page_count; i++)
-    {
-      if ((uint32_t) mt->virt_pages[i] == (((uint32_t) virt_addr) & 0xFFFFF000))
-	{
-	  return (i*PAGE_SIZE + ((uint32_t) virt_addr & 0xFFF));
-	}
-    }
-  return -1;
-}
-
-
 
 static void
 gpio_set_mode(uint32_t pin, uint32_t mode)
@@ -349,7 +214,7 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
   phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
   
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
-  for (i = 0; i < 19200; i++) 
+  for (i = 0; i < 3840 * buffer_length; i++) 
     {
       //Transfer timer every 30th sample
       if(i % 30 == 0){
@@ -384,7 +249,7 @@ init_hardware(uint32_t physCb)
   udelay(100);
   clk_reg[PCMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
   udelay(100);
-  clk_reg[PCMCLK_DIV] = 0x5A000000 | (50<<12);    // Set pcm div to 50, giving 10MHz
+  clk_reg[PCMCLK_DIV] = 0x5A000000 | ((50000/sample_freq)<<12);    // Set pcm div to 500, giving 1MHz
   udelay(100);
   clk_reg[PCMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
   udelay(100);
@@ -419,8 +284,8 @@ uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
 
 void init_buffer()
 {
-  trans_page = mt_init(20); 
-  con_blocks = mt_init(305);
+  trans_page = mt_init(buffer_length * 4); 
+  con_blocks = mt_init(buffer_length * 61);
 }
 
 void stop_dma_and_exit()
@@ -444,18 +309,13 @@ void set_sigaction()
 void* signal_processing(void* arg)
 {
   uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
-  uint64_t* time1 = malloc(2000*sizeof(uint64_t));
   memset(output_buffer, 0, 40000*8);
-  uint32_t* time_p = malloc(2000*sizeof(uint64_t));
-  void** xx = malloc(2000*sizeof(void*));
-  uint32_t*  coun = malloc(2000*sizeof(uint32_t));
-  uint32_t* my_buffer = malloc(50*PAGE_SIZE);
   int z = 0;
   int i;
   
-  struct timeval curr_freq_tick;
+  /*  struct timeval curr_freq_tick;
   struct timeval prev_freq_tick;
-  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}*/
 
   uint32_t curr_signal = 0, last_signal = 1488;
   uint64_t curr_tick, delta_time = 0;
@@ -467,10 +327,9 @@ void* signal_processing(void* arg)
     int j;
     void* x;
 
-    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
-    //    curr_freq_tick = clock();
+    /*    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
     time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;
+    prev_freq_tick = curr_freq_tick;*/
 		    
     
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
@@ -484,28 +343,12 @@ void* signal_processing(void* arg)
     for(;counter > 10;counter--){
       if (curr_pointer %  (32*4) == 0){
 	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-	/*time_p[z] = curr_pointer;
-	  time1[z] = curr_tick;
-	  coun[z] = counter;
-	  xx[z] = mt_get_pointer_from_virt(trans_page, (void*)x);
-	  z++;
-	  if(z == 2000 ) 
-	  {
-	  z = 0;
-	  assert(time_p != NULL);
-	  for (i = 0; i < 2000; i++)
-	  {
-	  printf("time %llu pointer %p counter %u x %p\n", time_p[i], time1[i], coun[i], xx[i]);
-	  }
-	  printf("pointer %p\n", time_p);
-	  }*/
 	curr_pointer+=8;
 	counter-=2;
       }
       curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
       if(last_signal == 1488) {last_signal = curr_signal; prev_tick = curr_tick;}
       if(curr_signal != last_signal)
-	//	if(curr_signal == 0)
 	  {
 	    delta_time = curr_tick - prev_tick;
 	    prev_tick = curr_tick;
@@ -518,9 +361,9 @@ void* signal_processing(void* arg)
 	{
 	  curr_pointer = 0;
 	}
-      curr_tick++;
+      curr_tick+=1000/sample_freq;
     }
-    udelay(10000);
+    udelay(proc_delay);
   }
 }
 
@@ -535,8 +378,6 @@ void* output_thread(void* arg)
 	  uint64_t current;
 	  current = output_queue.front();
 	  output_queue.pop();
-	  //	  printf("%u ", current);
-	  //	  printf("\n");
 	  i++;
 	  if(i == 1000)
 	    {
@@ -549,7 +390,7 @@ void* output_thread(void* arg)
 	    }
 
 	}
-      usleep(200000);
+      udelay(200000);
     }
 }
 
@@ -567,18 +408,45 @@ void* time_thread(void* arg)
 	  printf("%llu\n", current);
 	  
 	}
-      usleep(200000);
+      udelay(200000);
     }
 }
-
 
 
 int
 main(int argc, char **argv)
 {
-  //  printf("sizeof %zu", sizeof(suseconds_t));
   mlockall(MCL_CURRENT|MCL_FUTURE);
-  int i;
+  int i, opt=0;
+  int fr = 1;
+  
+  while ( (opt = getopt(argc,argv,"l:d:p:f:")) != -1){
+    switch (opt){
+    case 'l': 
+      if((atoi(optarg) > 0) && (atoi(optarg) < 1000)) 
+	buffer_length = atoi(optarg);
+      else
+	printf("Bad buffer length option. Using default value (5) .");
+      break;
+    case 'd': 
+      proc_delay = atoi(optarg);
+      break;
+    case 'p':
+      if((atoi(optarg) > 0) && (atoi(optarg) < 99)) 
+	proc_priority = atoi(optarg);
+      else
+	printf("Bad priority value. Should be between 0 and 99. Using default value (99).");
+      break;
+    case 'f':
+      fr = atoi(optarg);
+      if((1000 % fr) != 0)
+	printf("Bad frequency. Should divide 1000. Using default value (1000 KHz).");
+      else 
+	sample_freq = fr;
+      break;
+    };
+  };
+  
   dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
   pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
   pcm_reg = map_peripheral(PCM_BASE, PCM_LEN);
@@ -604,7 +472,7 @@ main(int argc, char **argv)
   sched_setscheduler(0, SCHED_FIFO, &param);
   
   pthread_attr_init(&thread_attr);
-  param.sched_priority = 50;
+  param.sched_priority = proc_priority;
   (void)pthread_attr_setschedparam(&thread_attr, &param);
   pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
   
@@ -617,8 +485,7 @@ main(int argc, char **argv)
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
   pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  //  pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
-
+  pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
 
   memset(&param2, 0, sizeof(param2));
   
@@ -629,6 +496,6 @@ main(int argc, char **argv)
   
   //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
 
-  while(1) sleep(20);
+  while(1) sleep(100000);
   return 0;
 }
