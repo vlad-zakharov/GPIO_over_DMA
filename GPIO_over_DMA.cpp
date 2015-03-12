@@ -468,7 +468,7 @@ main(int argc, char **argv)
   struct sched_param param, param2;
   memset(&param, 0, sizeof(param));
   
-  param.sched_priority = 10;
+  param.sched_priority = 12;
   sched_setscheduler(0, SCHED_FIFO, &param);
   
   pthread_attr_init(&thread_attr);
