@@ -124,10 +124,11 @@ unsigned int ppmSyncLength     = 4000;   // Length of PPM sync pause
 unsigned int ppmChannelsNumber = 8;      // Number of channels packed in PPM
 
 uint32_t buffer_length = 5; //buffer length divided by 16 kilobytes
-uint32_t proc_delay = 10000;
+uint32_t proc_delay = 10000; // main process delay (in microseconds)
 uint32_t proc_priority = 99;
 uint32_t sample_freq = 1000; // could be 1, 2, 5, 10, 25, 50
 uint32_t DMA_channel = 5;
+uint32_t max_counter = 14000; // this value must be mor than proc_delay
 
 
 static volatile uint32_t *pwm_reg;
@@ -342,6 +343,7 @@ void* signal_processing(void* arg)
 	break;}
     }
     uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
+    if(counter > max_counter) counter = max_counter;
     for(;counter > 10;counter--){
       if (curr_pointer %  (32*4) == 0){
 	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
@@ -422,27 +424,27 @@ main(int argc, char **argv)
   int i, opt=0;
   int fr = 1;
   
-  while ( (opt = getopt(argc,argv,"l:d:p:f:c:")) != -1){
+  while ( (opt = getopt(argc,argv,"l:d:p:f:c:m:")) != -1){
     switch (opt){
     case 'l': 
       if((atoi(optarg) > 0) && (atoi(optarg) < 1000)) 
 	buffer_length = atoi(optarg);
       else
-	printf("Bad buffer length option. Using default value (5) .");
+	printf("Bad buffer length option. Using default value (5).\n");
       break;
     case 'd': 
       proc_delay = atoi(optarg);
       break;
     case 'p':
-      if((atoi(optarg) > 0) && (atoi(optarg) < 99)) 
+      if((atoi(optarg) > 0) && (atoi(optarg) <= 99)) 
 	proc_priority = atoi(optarg);
       else
-	printf("Bad priority value. Should be between 0 and 99. Using default value (99).");
+	printf("Bad priority value. Should be between 0 and 99. Using default value (99).\n");
       break;
     case 'f':
       fr = atoi(optarg);
       if((1000 % fr) != 0)
-	printf("Bad frequency. Should divide 1000. Using default value (1000 KHz).");
+	printf("Bad frequency. Should divide 1000. Using default value (1000 KHz).\n");
       else 
 	sample_freq = fr;
       break;
@@ -450,8 +452,10 @@ main(int argc, char **argv)
       if((atoi(optarg) >=0) && (atoi(optarg) < 15))
 	DMA_channel = atoi(optarg);
       else
-	printf("Bad channel num. Should be between 0 and 14. Using default channel(5).");
+	printf("Bad channel num. Should be between 0 and 14. Using default channel(5).\n");
       //      if(DMA_channel == 15
+    case 'm':
+      max_counter = atoi(optarg);
     };
   };
   
