@@ -43,7 +43,8 @@ static uint8_t gpio_list[] = {
 
 // Memory Addresses
 #define DMA_BASE        0x20007000
-#define DMA_LEN         0x24
+#define DMA15_BASE      0x20E05000
+#define DMA_LEN         0x1000
 #define PWM_BASE        0x2020C000
 #define PWM_LEN         0x28
 #define CLK_BASE        0x20101000
@@ -126,6 +127,7 @@ uint32_t buffer_length = 5; //buffer length divided by 16 kilobytes
 uint32_t proc_delay = 10000;
 uint32_t proc_priority = 99;
 uint32_t sample_freq = 1000; // could be 1, 2, 5, 10, 25, 50
+uint32_t DMA_channel = 5;
 
 
 static volatile uint32_t *pwm_reg;
@@ -267,12 +269,13 @@ init_hardware(uint32_t physCb)
   udelay(100);
 
   // Initialise the DMA
-  dma_reg[DMA_CS] = DMA_RESET;
+
+  dma_reg[DMA_CS | DMA_channel << 8] = DMA_RESET;
   udelay(10);
-  dma_reg[DMA_CS] = DMA_INT | DMA_END;
-  dma_reg[DMA_CONBLK_AD] = physCb;
-  dma_reg[DMA_DEBUG] = 7; // clear debug error flags
-  dma_reg[DMA_CS] = 0x10880001;    // go, mid priority, wait for outstanding writes
+  dma_reg[DMA_CS | DMA_channel << 8] = DMA_INT | DMA_END;
+  dma_reg[DMA_CONBLK_AD | DMA_channel << 8] = physCb;
+  dma_reg[DMA_DEBUG | DMA_channel << 8] = 7; // clear debug error flags
+  dma_reg[DMA_CS | DMA_channel << 8] = 0x10880001;    // go, mid priority, wait for outstanding writes
 }
 
 uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
@@ -290,7 +293,7 @@ void init_buffer()
 
 void stop_dma_and_exit()
 {
-  dma_reg[DMA_CS] = 0;    // stop dma 
+  dma_reg[DMA_CS | DMA_channel << 8] = 0;    // stop dma 
   exit(1);
 }
 
@@ -330,15 +333,14 @@ void* signal_processing(void* arg)
     /*    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
     time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
     prev_freq_tick = curr_freq_tick;*/
-		    
+
     
-    dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD]);
+    dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD | DMA_channel << 8]);
     for(j = 1; j >= -1; j--){
       x = mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);
       if(x != NULL) {
 	break;}
     }
-
     uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
     for(;counter > 10;counter--){
       if (curr_pointer %  (32*4) == 0){
@@ -420,7 +422,7 @@ main(int argc, char **argv)
   int i, opt=0;
   int fr = 1;
   
-  while ( (opt = getopt(argc,argv,"l:d:p:f:")) != -1){
+  while ( (opt = getopt(argc,argv,"l:d:p:f:c:")) != -1){
     switch (opt){
     case 'l': 
       if((atoi(optarg) > 0) && (atoi(optarg) < 1000)) 
@@ -444,10 +446,16 @@ main(int argc, char **argv)
       else 
 	sample_freq = fr;
       break;
+    case 'c':
+      if((atoi(optarg) >=0) && (atoi(optarg) < 15))
+	DMA_channel = atoi(optarg);
+      else
+	printf("Bad channel num. Should be between 0 and 14. Using default channel(5).");
+      //      if(DMA_channel == 15
     };
   };
   
-  dma_reg = map_peripheral(DMA_BASE, DMA_LEN);
+  dma_reg = map_peripheral(DMA_BASE, DMA_LEN);    
   pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
   pcm_reg = map_peripheral(PCM_BASE, PCM_LEN);
   clk_reg = map_peripheral(CLK_BASE, CLK_LEN);
@@ -494,7 +502,7 @@ main(int argc, char **argv)
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
   pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
+  //pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
 
   while(1) sleep(100000);
   return 0;
