@@ -123,8 +123,8 @@ typedef struct {
 unsigned int ppmSyncLength     = 4000;   // Length of PPM sync pause
 unsigned int ppmChannelsNumber = 8;      // Number of channels packed in PPM
 
-uint32_t buffer_length = 5; //buffer length divided by 16 kilobytes
-uint32_t proc_delay = 10000; // main process delay (in microseconds)
+uint32_t buffer_length = 8; //buffer length divided by 16 kilobytes
+uint32_t proc_delay = 1000; // main process delay (in microseconds)
 uint32_t proc_priority = 99;
 uint32_t sample_freq = 1000; // could be 1, 2, 5, 10, 25, 50
 uint32_t DMA_channel = 5;
@@ -209,7 +209,8 @@ static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t
 static void
 init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_blocks)
 {
-  uint32_t phys_fifo_addr, i;
+  uint32_t phys_fifo_addr;
+  uint64_t i;
   uint32_t dest = 0;
   dma_cb_t* cbp = 0;
   dma_cb_t* cbp_curr;
@@ -217,10 +218,10 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
   phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
   
   //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
-  for (i = 0; i < 3840 * buffer_length; i++) 
+  for (i = 0; i < 56 * 128 * buffer_length; i++) 
     {
       //Transfer timer every 30th sample
-      if(i % 30 == 0){
+      if(i % 56 == 0){
 	cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
 
 	init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
@@ -229,8 +230,9 @@ init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_
       } 
       // Transfer GPIO
       cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
-      init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
-      dest += 4;
+      init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 1, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
+      //      printf("destination %p\n", cbp_curr->dst);
+      dest += 1;
       cbp++;
       // Delay
       cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
@@ -288,8 +290,8 @@ uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
 
 void init_buffer()
 {
-  trans_page = mt_init(buffer_length * 4); 
-  con_blocks = mt_init(buffer_length * 61);
+  trans_page = mt_init(buffer_length * 2); 
+  con_blocks = mt_init(buffer_length * 113);
 }
 
 void stop_dma_and_exit()
@@ -312,16 +314,17 @@ void set_sigaction()
 
 void* signal_processing(void* arg)
 {
+  //  uint8_t 
   uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
   memset(output_buffer, 0, 40000*8);
   int z = 0;
   int i;
   
-  /*  struct timeval curr_freq_tick;
+  struct timeval curr_freq_tick;
   struct timeval prev_freq_tick;
-  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}*/
+  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
 
-  uint32_t curr_signal = 0, last_signal = 1488;
+  uint8_t curr_signal = 0, last_signal = 228;
   uint64_t curr_tick, delta_time = 0;
   //sighandler
 
@@ -331,9 +334,9 @@ void* signal_processing(void* arg)
     int j;
     void* x;
 
-    /*    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
     time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;*/
+    prev_freq_tick = curr_freq_tick;
 
     
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD | DMA_channel << 8]);
@@ -342,31 +345,44 @@ void* signal_processing(void* arg)
       if(x != NULL) {
 	break;}
     }
-    uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFF80) >> 2;
-    if(counter > max_counter) counter = max_counter;
+
+    uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFFF0) >> 2;
+    //    if(counter > max_counter) counter = max_counter;
     for(;counter > 10;counter--){
-      if (curr_pointer %  (32*4) == 0){
+      if (curr_pointer %  (64) == 0){
 	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+	//	printf("curr_Tick %llx and pointer %p\n", curr_tick, mt_get_phys_from_pointer(trans_page, curr_pointer));
 	curr_pointer+=8;
-	counter-=2;
+	counter-=8;
       }
-      curr_signal = *((uint32_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      if(last_signal == 1488) {last_signal = curr_signal; prev_tick = curr_tick;}
+
+      //      printf("hello, my world\n");
+
+      curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
+      if(last_signal == 228) {last_signal = curr_signal; prev_tick = curr_tick;}
       if(curr_signal != last_signal)
 	  {
 	    delta_time = curr_tick - prev_tick;
+	    //printf("delta time %llu\n", delta_time);
 	    prev_tick = curr_tick;
 	    output_queue.push(delta_time);
-	    output_buffer[delta_time]++;
+	    //	    printf("1\n");
+	    output_buffer[delta_time]++; // match this value
+	    //	    printf("2\n");
 	  }
       last_signal = curr_signal;
-      curr_pointer+=4;
+      curr_pointer++;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
 	{
 	  curr_pointer = 0;
 	}
       curr_tick+=1000/sample_freq;
+
     }
+    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
+    prev_freq_tick = curr_freq_tick;
+
     udelay(proc_delay);
   }
 }
@@ -410,9 +426,8 @@ void* time_thread(void* arg)
 	  current = time_queue.front();
 	  time_queue.pop();
 	  printf("%llu\n", current);
-	  
 	}
-      udelay(200000);
+      udelay(2000);
     }
 }
 
@@ -506,7 +521,7 @@ main(int argc, char **argv)
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
   pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  //pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
+  //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
 
   while(1) sleep(100000);
   return 0;
