@@ -128,7 +128,7 @@ uint32_t proc_delay = 1000; // main process delay (in microseconds)
 uint32_t proc_priority = 99;
 uint32_t sample_freq = 1000; // could be 1, 2, 5, 10, 25, 50
 uint32_t DMA_channel = 5;
-uint32_t max_counter = 14000; // this value must be mor than proc_delay
+uint32_t max_counter = 2500; // this value must be mor than proc_delay
 
 
 static volatile uint32_t *pwm_reg;
@@ -283,6 +283,7 @@ init_hardware(uint32_t physCb)
 
 uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
 {
+  //  printf("read_addr %p write_addr %p\n", read_addr, write_addr);
   if( write_addr > read_addr ) return ((uint32_t) write_addr - (uint32_t) read_addr);
   else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
 }
@@ -315,10 +316,12 @@ void set_sigaction()
 void* signal_processing(void* arg)
 {
   //  uint8_t 
+  uint32_t counter;
   uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
   memset(output_buffer, 0, 40000*8);
   int z = 0;
   int i;
+  int curr_tick_inc = 1000/sample_freq;
   
   struct timeval curr_freq_tick;
   struct timeval prev_freq_tick;
@@ -326,6 +329,15 @@ void* signal_processing(void* arg)
 
   uint8_t curr_signal = 0, last_signal = 228;
   uint64_t curr_tick, delta_time = 0;
+
+  //
+  curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+  prev_tick = curr_tick;
+  curr_pointer += 8;
+  curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
+  last_signal = curr_signal;
+  curr_pointer ++;
+  //
   //sighandler
 
   z = 0;
@@ -334,9 +346,9 @@ void* signal_processing(void* arg)
     int j;
     void* x;
 
-    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    /*if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
     time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;
+    prev_freq_tick = curr_freq_tick;*/
 
     
     dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD | DMA_channel << 8]);
@@ -345,44 +357,34 @@ void* signal_processing(void* arg)
       if(x != NULL) {
 	break;}
     }
+    counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFFF0);
+    //    printf("counter (bytes av) %u\n", counter);
+    /*    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
+    prev_freq_tick = curr_freq_tick;*/
 
-    uint32_t counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFFF0) >> 2;
-    //    if(counter > max_counter) counter = max_counter;
+    if(counter > max_counter) counter = max_counter;
     for(;counter > 10;counter--){
       if (curr_pointer %  (64) == 0){
 	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-	//	printf("curr_Tick %llx and pointer %p\n", curr_tick, mt_get_phys_from_pointer(trans_page, curr_pointer));
 	curr_pointer+=8;
 	counter-=8;
       }
-
-      //      printf("hello, my world\n");
-
       curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      if(last_signal == 228) {last_signal = curr_signal; prev_tick = curr_tick;}
       if(curr_signal != last_signal)
-	  {
-	    delta_time = curr_tick - prev_tick;
-	    //printf("delta time %llu\n", delta_time);
-	    prev_tick = curr_tick;
-	    output_queue.push(delta_time);
-	    //	    printf("1\n");
-	    output_buffer[delta_time]++; // match this value
-	    //	    printf("2\n");
-	  }
+	{
+	  delta_time = curr_tick - prev_tick;
+	  prev_tick = curr_tick;
+	  output_queue.push(delta_time);
+	}
       last_signal = curr_signal;
       curr_pointer++;
       if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
 	{
 	  curr_pointer = 0;
 	}
-      curr_tick+=1000/sample_freq;
-
+      curr_tick+=curr_tick_inc;
     }
-    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
-    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;
-
     udelay(proc_delay);
   }
 }
@@ -397,6 +399,8 @@ void* output_thread(void* arg)
 	{
 	  uint64_t current;
 	  current = output_queue.front();
+	  //	  printf("value %llu\n", current);
+	  output_buffer[current]++;
 	  output_queue.pop();
 	  i++;
 	  if(i == 1000)
@@ -470,7 +474,8 @@ main(int argc, char **argv)
 	printf("Bad channel num. Should be between 0 and 14. Using default channel(5).\n");
       //      if(DMA_channel == 15
     case 'm':
-      max_counter = atoi(optarg);
+      if(atoi(optarg) > 0)
+	max_counter = atoi(optarg);
     };
   };
   
@@ -495,7 +500,7 @@ main(int argc, char **argv)
   struct sched_param param, param2;
   memset(&param, 0, sizeof(param));
   
-  param.sched_priority = 12;
+  param.sched_priority = 1;
   sched_setscheduler(0, SCHED_FIFO, &param);
   
   pthread_attr_init(&thread_attr);
@@ -514,12 +519,12 @@ main(int argc, char **argv)
   
   pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
 
-  memset(&param2, 0, sizeof(param2));
+  /*  memset(&param2, 0, sizeof(param2));
   
   pthread_attr_init(&thread_attr2);
   param2.sched_priority = 1;
   (void)pthread_attr_setschedparam(&thread_attr2, &param2);
-  pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
+  pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);*/
   
   //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
 
