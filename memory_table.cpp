@@ -1,4 +1,4 @@
-#include "memory_table.hpp"
+#include "memory_table.h"
 
 using namespace std;
 
@@ -8,9 +8,9 @@ memory_table_t* mt_init(uint32_t page_count)
   uint64_t pageInfo;
   void* offset;
 
-  memory_table_t* memory_table = malloc(sizeof(memory_table_t));
-  memory_table->virt_pages = malloc(page_count * sizeof(void*));
-  memory_table->phys_pages = malloc(page_count * sizeof(void*));
+  memory_table_t* memory_table = (memory_table_t*)malloc(sizeof(memory_table_t));
+  memory_table->virt_pages = (void**)malloc(page_count * sizeof(void*));
+  memory_table->phys_pages = (void**)malloc(page_count * sizeof(void*));
   memory_table->page_count = page_count;
 
 
@@ -51,7 +51,8 @@ memory_table_t* mt_init(uint32_t page_count)
   for(i = 0; i < page_count; i++)
     {
       munmap(memory_table->virt_pages[i], PAGE_SIZE);
-      memory_table->virt_pages[i]  =  mmap(memory_table->virt_pages[i], PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED|MAP_NORESERVE|MAP_LOCKED,fdMem, (void*)((uint32_t)memory_table->phys_pages[i] | 0x40000000));
+      memory_table->virt_pages[i]  = mmap(memory_table->virt_pages[i], PAGE_SIZE, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_FIXED|MAP_NORESERVE|MAP_LOCKED,fdMem, ((uint32_t)memory_table->phys_pages[i] | 0xC0000000));
+      printf("phys page %p virt page %p\n", memory_table->virt_pages[i], memory_table->phys_pages[i]);
     }
   close(file);
   close(fdMem);
@@ -64,7 +65,7 @@ void* mt_get_phys_addr(volatile memory_table_t* memory_table, void* virt_addr)
   for(i = 0; i < memory_table->page_count; i++)
     {
       if ((uint32_t) memory_table->virt_pages[i] == (((uint32_t) virt_addr) & 0xFFFFF000)){
-	return (void*) (((uint32_t) memory_table->phys_pages[i] + ((uint32_t) virt_addr & 0xFFF)) | 0x40000000);
+	return (void*) (((uint32_t) memory_table->phys_pages[i] + ((uint32_t) virt_addr & 0xFFF)) | 0xC0000000);
       }
     }
   return NULL;
@@ -73,7 +74,7 @@ void* mt_get_phys_addr(volatile memory_table_t* memory_table, void* virt_addr)
 void* mt_get_virt_addr(volatile memory_table_t* memory_table, void* phys_addr)
 {
   int i;
-  phys_addr = (void*)((uint32_t) phys_addr & 0xbfffffff);
+  phys_addr = (void*)((uint32_t) phys_addr & 0x3fffffff);
   for(i = 0; i < memory_table->page_count; i++)
     {
       if ((uint32_t) memory_table->phys_pages[i] == (((uint32_t) phys_addr) & 0xFFFFF000)){
@@ -87,16 +88,16 @@ void* mt_get_virt_addr(volatile memory_table_t* memory_table, void* phys_addr)
 void* mt_get_virt_from_pointer(volatile memory_table_t* mt, uint32_t pointer)
 {
   if(pointer >= PAGE_SIZE * mt->page_count) return NULL;
-  return mt->virt_pages[(uint32_t) pointer / 4096] + pointer % 4096;
+  return (uint8_t*)mt->virt_pages[(uint32_t) pointer / 4096] + pointer % 4096;
 }
 
 void* mt_get_phys_from_pointer(volatile memory_table_t* mt, uint32_t pointer)
 {
   if(pointer >= PAGE_SIZE * mt->page_count) return NULL;
-  return mt->phys_pages[(uint32_t) pointer / 4096] + pointer % 4096;
+  return (uint8_t*)mt->phys_pages[(uint32_t) pointer / 4096] + pointer % 4096;
 }
 
-int32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr)
+uint32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr)
 {
   int i;
   for(i = 0; i < mt->page_count; i++)

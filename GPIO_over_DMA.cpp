@@ -1,4 +1,4 @@
-#include "memory_table.hpp"
+#include "memory_table.h"
 #include <signal.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -22,14 +22,14 @@ using namespace std;
 
 // 8 GPIOs to use for driving servos
 static uint8_t gpio_list[] = {
-  4,    // P1-7
-  17,    // P1-11
-  18,    // P1-12
-  21,    // P1-13
-  22,    // P1-15
-  23,    // P1-16
-  24,    // P1-18
-  25,    // P1-22
+    4,    // P1-7
+    17,    // P1-11
+    18,    // P1-12
+    21,    // P1-13
+    22,    // P1-15
+    23,    // P1-16
+    24,    // P1-18
+    25,    // P1-22
 };
 
 //#define DBG             1
@@ -42,18 +42,18 @@ static uint8_t gpio_list[] = {
 #endif
 
 // Memory Addresses
-#define DMA_BASE        0x20007000
-#define DMA15_BASE      0x20E05000
+#define DMA_BASE        0x3F007000
+#define DMA15_BASE      0x3FE05000
 #define DMA_LEN         0x1000
-#define PWM_BASE        0x2020C000
+#define PWM_BASE        0x3F20C000
 #define PWM_LEN         0x28
-#define CLK_BASE        0x20101000
+#define CLK_BASE        0x3F101000
 #define CLK_LEN         0xA8
-#define GPIO_BASE       0x20200000
+#define GPIO_BASE       0x3F200000
 #define GPIO_LEN        0x100
-#define PCM_BASE        0x20203000
+#define PCM_BASE        0x3F203000
 #define PCM_LEN         0x24
-#define TIMER_BASE      0x7E003004
+#define TIMER_BASE      0x3F003004
 
 #define DMA_SRC_INC     (1<<8)
 #define DMA_DEST_INC    (1<<4)
@@ -70,7 +70,7 @@ static uint8_t gpio_list[] = {
 #define DMA_DEBUG       (0x20/4)
 
 // GPIO Memory Addresses
-#define GPIO_LEV0_ADDR  0x7E200034 
+#define GPIO_LEV0_ADDR  0x3F200034 
 #define GPIO_FSEL0      (0x00/4)
 #define GPIO_SET0       (0x1c/4)
 #define GPIO_CLR0       (0x28/4)
@@ -116,8 +116,8 @@ static uint8_t gpio_list[] = {
 #define DELAY_VIA_PCM   1
 
 typedef struct {
-  uint32_t info, src, dst, length,
-    stride, next, pad[2];
+    uint32_t info, src, dst, length,
+	stride, next, pad[2];
 } dma_cb_t;
 
 unsigned int ppmSyncLength     = 4000;   // Length of PPM sync pause
@@ -131,66 +131,65 @@ uint32_t DMA_channel = 5;
 uint32_t max_counter = 2500; // this value must be mor than proc_delay
 
 
-static volatile uint32_t *pwm_reg;
-static volatile uint32_t *pcm_reg;
-static volatile uint32_t *clk_reg;
-static volatile uint32_t *dma_reg;
-static volatile uint32_t *gpio_reg;
-static volatile uint32_t* destination;
-static volatile memory_table_t* trans_page;
-static volatile memory_table_t* con_blocks;
+static uint32_t *pwm_reg;
+static uint32_t *pcm_reg;
+static uint32_t *clk_reg;
+static uint32_t *dma_reg;
+static uint32_t *gpio_reg;
+static uint32_t* destination;
+static memory_table_t* trans_page;
+static memory_table_t* con_blocks;
 uint32_t channels[8];
 uint32_t counter2 = 0;
 pthread_t _signal_handler;
 pthread_t _output_thread, _time_thread;
 queue<uint64_t> output_queue;
 queue<uint64_t> time_queue;
-uint64_t output_buffer[40000];
+uint64_t output_buffer[100000];
 
 static void
 gpio_set_mode(uint32_t pin, uint32_t mode)
 {
-  uint32_t fsel = gpio_reg[GPIO_FSEL0 + pin/10];
+    uint32_t fsel = gpio_reg[GPIO_FSEL0 + pin/10];
 
-  fsel &= ~(7 << ((pin % 10) * 3));
-  fsel |= mode << ((pin % 10) * 3);
-  gpio_reg[GPIO_FSEL0 + pin/10] = fsel;
+    fsel &= ~(7 << ((pin % 10) * 3));
+    fsel |= mode << ((pin % 10) * 3);
+    gpio_reg[GPIO_FSEL0 + pin/10] = fsel;
 }
 
 // Sets the gpio to input (level=1) or output (level=0)
 static void
 gpio_set(int pin, int level)
 {
-  if (level)
-    gpio_reg[GPIO_SET0] = 1 << pin;
-  else
-    gpio_reg[GPIO_CLR0] = 1 << pin;
+    if (level)
+	gpio_reg[GPIO_SET0] = 1 << pin;
+    else
+	gpio_reg[GPIO_CLR0] = 1 << pin;
 }
-
 // Very short delay
 static void
 udelay(int us)
 {
-  struct timespec ts = { 0, us * 1000 };
+    struct timespec ts = { 0, us * 1000 };
 
-  nanosleep(&ts, NULL);
+    nanosleep(&ts, NULL);
 }
 
 // More memory mapping
 static void *
 map_peripheral(uint32_t base, uint32_t len)
 {
-  int fd = open("/dev/mem", O_RDWR);
-  void * vaddr;
+    int fd = open("/dev/mem", O_RDWR);
+    void * vaddr;
 
-  if (fd < 0)
-    printf("rpio-pwm: Failed to open /dev/mem: %m\n");
-  vaddr = mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, base);
-  if (vaddr == MAP_FAILED)
-    printf("rpio-pwm: Failed to map peripheral at 0x%08x: %m\n", base);
-  close(fd);
+    if (fd < 0)
+	printf("rpio-pwm: Failed to open /dev/mem: %m\n");
+    vaddr = mmap(NULL, len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, base);
+    if (vaddr == MAP_FAILED)
+	printf("rpio-pwm: Failed to map peripheral at 0x%08x: %m\n", base);
+    close(fd);
 
-  return vaddr;
+    return vaddr;
 }
 
 
@@ -198,336 +197,344 @@ map_peripheral(uint32_t base, uint32_t len)
 //Method to init DMA control block
 static void init_dma_cb(dma_cb_t** cbp, uint32_t mode, uint32_t source, uint32_t dest, uint32_t length, uint32_t stride, uint32_t next_cb)
 {
-  (*cbp)->info = mode;
-  (*cbp)->src = source;
-  (*cbp)->dst = dest;
-  (*cbp)->length = length;
-  (*cbp)->next = next_cb;
-  (*cbp)->stride = stride;
+    (*cbp)->info = mode;
+    (*cbp)->src = source;
+    (*cbp)->dst = dest;
+    (*cbp)->length = length;
+    (*cbp)->next = next_cb;
+    (*cbp)->stride = stride;
 }
 
 static void
 init_ctrl_data(volatile memory_table_t* mem_table, volatile memory_table_t* con_blocks)
 {
-  uint32_t phys_fifo_addr;
-  uint64_t i;
-  uint32_t dest = 0;
-  dma_cb_t* cbp = 0;
-  dma_cb_t* cbp_curr;
-  //Set fifo addr (for delay)
-  phys_fifo_addr = (PCM_BASE | 0x7e000000) + 0x04;
-  
-  //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
-  for (i = 0; i < 56 * 128 * buffer_length; i++) 
-    {
-      //Transfer timer every 30th sample
-      if(i % 56 == 0){
-	cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
+    uint32_t phys_fifo_addr;
+    uint64_t i;
+    uint32_t dest = 0;
+    dma_cb_t* cbp = 0;
+    dma_cb_t* cbp_curr;
+    //Set fifo addr (for delay)
+    phys_fifo_addr = PCM_BASE + 0x04;
+    //Init dma control blocks. For 960 i it is created 1024 control blocks (it is 
+    fprintf(stderr, "BEFORE BEFORE!\n");
+    for (i = 0; i < 56 * 128 * buffer_length; i++) 
+	{
+	    //Transfer timer every 30th sample
+	    if(i % 56 == 0){
+		cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
 
-	init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
-	dest += 8;
-	cbp++;
-      } 
-      // Transfer GPIO
-      cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
-      init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 1, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
-      //      printf("destination %p\n", cbp_curr->dst);
-      dest += 1;
-      cbp++;
-      // Delay
-      cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
-      init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
-      cbp++;
-    }
-
-  cbp--;
-  ((dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t)cbp))->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->virt_pages[0]);
-  //  printf("virt_con_next %#x, phys_con_next %#x\n", cbp_curr + 1, cbp_curr->next);
+		init_dma_cb(&cbp_curr, (uint32_t)DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_DEST_INC | DMA_SRC_INC, TIMER_BASE, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 8, 0, (uint32_t) mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
+		dest += 8;
+		cbp++;
+	    } 
+	    // Transfer GPIO
+	    cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
+	    init_dma_cb(&cbp_curr, (uint32_t)DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP, GPIO_LEV0_ADDR, (uint32_t) mt_get_phys_from_pointer(mem_table, dest), 1, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
+	    //      printf("destination %p\n", cbp_curr->dst);
+	    dest += 1;
+	    cbp++;
+	    // Delay
+	    cbp_curr = (dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t) cbp);
+	    init_dma_cb(&cbp_curr, DMA_NO_WIDE_BURSTS | DMA_WAIT_RESP | DMA_D_DREQ | DMA_PER_MAP(2), TIMER_BASE, phys_fifo_addr, 4, 0, (uint32_t)  mt_get_phys_from_pointer(con_blocks, (uint32_t)(cbp + 1)));
+	    cbp++;
+	    //	    fprintf(stderr, "AFTER AFTER!\n");
+	}
+    cbp--;
+    ((dma_cb_t*)mt_get_virt_from_pointer(con_blocks, (uint32_t)cbp))->next = (uint32_t) mt_get_phys_addr(con_blocks, con_blocks->virt_pages[0]);
+    //  printf("virt_con_next %#x, phys_con_next %#x\n", cbp_curr + 1, cbp_curr->next);
 }
 
 // Initialize PWM (or PCM) and DMA
 static void
 init_hardware(uint32_t physCb)
 {
-  // Initialise PCM
-  pcm_reg[PCM_CS_A] = 1;                // Disable Rx+Tx, Enable PCM block
-  udelay(100);
-  clk_reg[PCMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
-  udelay(100);
-  clk_reg[PCMCLK_DIV] = 0x5A000000 | ((50000/sample_freq)<<12);    // Set pcm div to 500, giving 1MHz
-  udelay(100);
-  clk_reg[PCMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
-  udelay(100);
-  pcm_reg[PCM_TXC_A] = 0<<31 | 1<<30 | 0<<20 | 0<<16; // 1 channel, 8 bits
-  udelay(100);
-  pcm_reg[PCM_MODE_A] = (10 - 1) << 10;
-  udelay(100);
-  pcm_reg[PCM_CS_A] |= 1<<4 | 1<<3;        // Clear FIFOs
-  udelay(100);
-  pcm_reg[PCM_DREQ_A] = 64<<24 | 64<<8;        // DMA Req when one slot is free?
-  udelay(100);
-  pcm_reg[PCM_CS_A] |= 1<<9;            // Enable DMA
-  udelay(100);
-  pcm_reg[PCM_CS_A] |= 1<<2;            // Enable Tx
-  udelay(100);
+    // Initialise PCM
+    pcm_reg[PCM_CS_A] = 1;                // Disable Rx+Tx, Enable PCM block
+    udelay(100);
+    clk_reg[PCMCLK_CNTL] = 0x5A000006;        // Source=PLLD (500MHz)
+    udelay(100);
+    clk_reg[PCMCLK_DIV] = 0x5A000000 | ((50000/sample_freq)<<12);    // Set pcm div to 500, giving 1MHz
+    udelay(100);
+    clk_reg[PCMCLK_CNTL] = 0x5A000016;        // Source=PLLD and enable
+    udelay(100);
+    pcm_reg[PCM_TXC_A] = 0<<31 | 1<<30 | 0<<20 | 0<<16; // 1 channel, 8 bits
+    udelay(100);
+    pcm_reg[PCM_MODE_A] = (10 - 1) << 10;
+    udelay(100);
+    pcm_reg[PCM_CS_A] |= 1<<4 | 1<<3;        // Clear FIFOs
+    udelay(100);
+    pcm_reg[PCM_DREQ_A] = 64<<24 | 64<<8;        // DMA Req when one slot is free?
+    udelay(100);
+    pcm_reg[PCM_CS_A] |= 1<<9;            // Enable DMA
+    udelay(100);
+    pcm_reg[PCM_CS_A] |= 1<<2;            // Enable Tx
+    udelay(100);
 
-  // Initialise the DMA
+    // Initialise the DMA
 
-  dma_reg[DMA_CS | DMA_channel << 8] = DMA_RESET;
-  udelay(10);
-  dma_reg[DMA_CS | DMA_channel << 8] = DMA_INT | DMA_END;
-  dma_reg[DMA_CONBLK_AD | DMA_channel << 8] = physCb;
-  dma_reg[DMA_DEBUG | DMA_channel << 8] = 7; // clear debug error flags
-  dma_reg[DMA_CS | DMA_channel << 8] = 0x10880001;    // go, mid priority, wait for outstanding writes
+    dma_reg[DMA_CS | DMA_channel << 8] = DMA_RESET;
+    udelay(10);
+    dma_reg[DMA_CS | DMA_channel << 8] = DMA_INT | DMA_END;
+    dma_reg[DMA_CONBLK_AD | DMA_channel << 8] = physCb;
+    dma_reg[DMA_DEBUG | DMA_channel << 8] = 7; // clear debug error flags
+    dma_reg[DMA_CS | DMA_channel << 8] = 0x10880001;    // go, mid priority, wait for outstanding writes
 }
 
 uint32_t bytes_available(void* read_addr, void* write_addr, uint32_t buff_size)
 {
-  //  printf("read_addr %p write_addr %p\n", read_addr, write_addr);
-  if( write_addr > read_addr ) return ((uint32_t) write_addr - (uint32_t) read_addr);
-  else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
+    //  printf("read_addr %p write_addr %p\n", read_addr, write_addr);
+    if( write_addr > read_addr ) return ((uint32_t) write_addr - (uint32_t) read_addr);
+    else return buff_size - ((uint32_t) read_addr - (uint32_t) write_addr);
 }
 
 
 void init_buffer()
 {
-  trans_page = mt_init(buffer_length * 2); 
-  con_blocks = mt_init(buffer_length * 113);
+    trans_page = mt_init(buffer_length * 2); 
+    con_blocks = mt_init(buffer_length * 113);
 }
 
-void stop_dma_and_exit()
+void stop_dma_and_exit(int param)
 {
-  dma_reg[DMA_CS | DMA_channel << 8] = 0;    // stop dma 
-  exit(1);
+    dma_reg[DMA_CS | DMA_channel << 8] = 0;    // stop dma 
+    exit(1);
 }
 
 void set_sigaction()
 {
-  for (int i = 0; i < 64; i++) 
-    { //catch all signals (like ctrl+c, ctrl+z, ...) to ensure DMA is disabled
-      struct sigaction sa;
-      memset(&sa, 0, sizeof(sa));
-      sa.sa_handler = stop_dma_and_exit;
-      sigaction(i, &sa, NULL);
-    }
+    for (int i = 0; i < 64; i++) 
+	{ //catch all signals (like ctrl+c, ctrl+z, ...) to ensure DMA is disabled
+	    struct sigaction sa;
+	    memset(&sa, 0, sizeof(sa));
+	    sa.sa_handler = stop_dma_and_exit;
+	    sigaction(i, &sa, NULL);
+	}
 }
 
 
 void* signal_processing(void* arg)
 {
-  //  uint8_t 
-  uint32_t counter;
-  uint32_t curr_pointer = 0, prev_tick = 0, first_change = 1, curr_channel = 0;
-  memset(output_buffer, 0, 40000*8);
-  int z = 0;
-  int i;
-  int curr_tick_inc = 1000/sample_freq;
+    //  uint8_t 
+    uint32_t counter;
+    uint32_t prev_tick = 0, first_change = 1, curr_channel = 0;
+    uint32_t  curr_pointer = 0;
+    memset(output_buffer, 0, 40000*8);
+    int z = 0;
+    int i;
+    int curr_tick_inc = 1000/sample_freq;
   
-  struct timeval curr_freq_tick;
-  struct timeval prev_freq_tick;
-  if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+    struct timeval curr_freq_tick;
+    struct timeval prev_freq_tick;
+    if(gettimeofday(&prev_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
 
-  uint8_t curr_signal = 0, last_signal = 228;
-  uint64_t curr_tick, delta_time = 0;
+    uint8_t curr_signal = 0, last_signal = 228;
+    uint64_t curr_tick, delta_time = 0;
 
-  //
-  curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-  prev_tick = curr_tick;
-  curr_pointer += 8;
-  curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-  last_signal = curr_signal;
-  curr_pointer ++;
-  //
-  //sighandler
+    //
+    curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+    prev_tick = curr_tick;
+    curr_pointer += 8;
+    curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
+    last_signal = curr_signal;
+    curr_pointer ++;
+    //
+    //sighandler
 
-  z = 0;
+    z = 0;
 
-  for(;;){
-    int j;
-    void* x;
+    for(;;){
+	int j;
+	void* x;
 
-    /*if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
-    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;*/
+	/*if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
+	  time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
+	  prev_freq_tick = curr_freq_tick;*/
 
     
-    dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD | DMA_channel << 8]);
-    for(j = 1; j >= -1; j--){
-      x = mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);
-      if(x != NULL) {
-	break;}
-    }
-    counter = (bytes_available(curr_pointer, mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFFF0);
-    //    printf("counter (bytes av) %u\n", counter);
-    /*    if(gettimeofday(&curr_freq_tick, NULL) != 0) {printf("Error with getting time\n");}
-    time_queue.push((uint64_t)(curr_freq_tick.tv_sec * 1000000 + curr_freq_tick.tv_usec - prev_freq_tick.tv_sec * 1000000 - prev_freq_tick.tv_usec));
-    prev_freq_tick = curr_freq_tick;*/
+	dma_cb_t* ad = (dma_cb_t*) mt_get_virt_addr(con_blocks, (void*) dma_reg[DMA_CONBLK_AD | DMA_channel << 8]);
+	for(j = 1; j >= -1; j--){
+	    x = mt_get_virt_addr(trans_page, (void*) (ad + j)->dst);
+	    if(x != NULL) {
+		break;}
+	}
+	counter = (bytes_available((void*)curr_pointer, (void*) mt_get_pointer_from_virt(trans_page, (void*)x), trans_page->page_count * PAGE_SIZE) & 0xFFFFFFF0);
 
-    if(counter > max_counter) counter = max_counter;
-    for(;counter > 10;counter--){
-      if (curr_pointer %  (64) == 0){
-	curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
-	curr_pointer+=8;
-	counter-=8;
-      }
-      curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
-      if(curr_signal != last_signal)
-	{
-	  delta_time = curr_tick - prev_tick;
-	  prev_tick = curr_tick;
-	  output_queue.push(delta_time);
+	if(counter > max_counter) counter = max_counter;
+	for(;counter > 10;counter--){
+	    if (curr_pointer %  (64) == 0){
+		curr_tick = *((uint64_t*) mt_get_virt_from_pointer(trans_page, curr_pointer));
+		curr_pointer+=8;
+		counter-=8;
+	    }
+	    curr_signal = *((uint8_t*) mt_get_virt_from_pointer(trans_page, curr_pointer)) & 0x10 ? 1 : 0;
+	    if(curr_signal != last_signal)
+		{
+		    if(curr_signal == 0)
+			{
+			    //printf("delta time %lld\n", delta_time);
+			    delta_time = curr_tick - prev_tick;
+			    prev_tick = curr_tick;
+			    output_queue.push(delta_time);
+			}
+		}
+	    last_signal = curr_signal;
+	    curr_pointer++;
+	    if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
+		{
+		    curr_pointer = 0;
+		}
+	    curr_tick+=curr_tick_inc;
 	}
-      last_signal = curr_signal;
-      curr_pointer++;
-      if(curr_pointer >= trans_page->page_count*PAGE_SIZE)
-	{
-	  curr_pointer = 0;
-	}
-      curr_tick+=curr_tick_inc;
+	udelay(proc_delay);
     }
-    udelay(proc_delay);
-  }
 }
 
 void* output_thread(void* arg)
 {
-  int i, j;
-  int curr_count;
-  while(1)
-    {
-      while(!output_queue.empty())
+    int i, j;
+    int curr_count;
+    FILE* fileb;
+    while(1)
 	{
-	  uint64_t current;
-	  current = output_queue.front();
-	  //	  printf("value %llu\n", current);
-	  output_buffer[current]++;
-	  output_queue.pop();
-	  i++;
-	  if(i == 1000)
-	    {
-	      for(j = 0; j < 40000; j++){
-		if(output_buffer[j] != 0)
-		  printf("value %u count %u\n", j, output_buffer[j]);
-		i = 0;
-	      }
-	      
-	    }
-
+	    while(!output_queue.empty())
+		{
+		    uint64_t current;
+		    current = output_queue.front();
+		    printf("value %llu\n", current);
+		    output_buffer[current]++;
+		    output_queue.pop();
+		    i++;
+		    if(i == 1000)
+			{
+			    fileb = fopen("logfile", "w");
+			    for(j = 0; j < 100000; j++){
+				if(output_buffer[j] != 0)
+				    fprintf(fileb, "value %d count %llu\n", j, output_buffer[j]);
+				i = 0;
+			    }
+			    fclose(fileb);
+			    printf("DONE\n");
+			}
+		}
+	    udelay(200000);
 	}
-      udelay(200000);
-    }
 }
 
 void* time_thread(void* arg)
 {
-  int i, j;
-  int curr_count;
-  while(1)
-    {
-      while(!time_queue.empty())
+    int i, j;
+    int curr_count;
+    while(1)
 	{
-	  uint64_t current;
-	  current = time_queue.front();
-	  time_queue.pop();
-	  printf("%llu\n", current);
+	    while(!time_queue.empty())
+		{
+		    uint64_t current;
+		    current = time_queue.front();
+		    time_queue.pop();
+		    printf("%llu\n", current);
+		}
+	    udelay(2000);
 	}
-      udelay(2000);
-    }
 }
 
 
 int
 main(int argc, char **argv)
 {
-  mlockall(MCL_CURRENT|MCL_FUTURE);
-  int i, opt=0;
-  int fr = 1;
+    mlockall(MCL_CURRENT|MCL_FUTURE);
+    int i, opt=0;
+    int fr = 1;
   
-  while ( (opt = getopt(argc,argv,"l:d:p:f:c:m:")) != -1){
-    switch (opt){
-    case 'l': 
-      if((atoi(optarg) > 0) && (atoi(optarg) < 1000)) 
-	buffer_length = atoi(optarg);
-      else
-	printf("Bad buffer length option. Using default value (5).\n");
-      break;
-    case 'd': 
-      proc_delay = atoi(optarg);
-      break;
-    case 'p':
-      if((atoi(optarg) > 0) && (atoi(optarg) <= 99)) 
-	proc_priority = atoi(optarg);
-      else
-	printf("Bad priority value. Should be between 0 and 99. Using default value (99).\n");
-      break;
-    case 'f':
-      fr = atoi(optarg);
-      if((1000 % fr) != 0)
-	printf("Bad frequency. Should divide 1000. Using default value (1000 KHz).\n");
-      else 
-	sample_freq = fr;
-      break;
-    case 'c':
-      if((atoi(optarg) >=0) && (atoi(optarg) < 15))
-	DMA_channel = atoi(optarg);
-      else
-	printf("Bad channel num. Should be between 0 and 14. Using default channel(5).\n");
-      //      if(DMA_channel == 15
-    case 'm':
-      if(atoi(optarg) > 0)
-	max_counter = atoi(optarg);
+    while ( (opt = getopt(argc,argv,"l:d:p:f:c:m:")) != -1){
+	switch (opt){
+	case 'l': 
+	    if((atoi(optarg) > 0) && (atoi(optarg) < 1000)) 
+		buffer_length = atoi(optarg);
+	    else
+		printf("Bad buffer length option. Using default value (5).\n");
+	    break;
+	case 'd': 
+	    proc_delay = atoi(optarg);
+	    break;
+	case 'p':
+	    if((atoi(optarg) > 0) && (atoi(optarg) <= 99)) 
+		proc_priority = atoi(optarg);
+	    else
+		printf("Bad priority value. Should be between 0 and 99. Using default value (99).\n");
+	    break;
+	case 'f':
+	    fr = atoi(optarg);
+	    if((1000 % fr) != 0)
+		printf("Bad frequency. Should divide 1000. Using default value (1000 KHz).\n");
+	    else 
+		sample_freq = fr;
+	    break;
+	case 'c':
+	    if((atoi(optarg) >=0) && (atoi(optarg) < 15))
+		DMA_channel = atoi(optarg);
+	    else
+		printf("Bad channel num. Should be between 0 and 14. Using default channel(5).\n");
+	    //      if(DMA_channel == 15
+	case 'm':
+	    if(atoi(optarg) > 0)
+		max_counter = atoi(optarg);
+	};
     };
-  };
   
-  dma_reg = map_peripheral(DMA_BASE, DMA_LEN);    
-  pwm_reg = map_peripheral(PWM_BASE, PWM_LEN);
-  pcm_reg = map_peripheral(PCM_BASE, PCM_LEN);
-  clk_reg = map_peripheral(CLK_BASE, CLK_LEN);
-  gpio_reg = map_peripheral(GPIO_BASE, GPIO_LEN);
-  for (i = 0; i < NUM_GPIOS; i++) {
-    gpio_set(gpio_list[i], 0);
-    gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
-  }
+    //
+    fprintf(stderr, "hello, world!\n");
+    dma_reg = (uint32_t*)map_peripheral(DMA_BASE, DMA_LEN);    
+    pwm_reg = (uint32_t*)map_peripheral(PWM_BASE, PWM_LEN);
+    pcm_reg = (uint32_t*)map_peripheral(PCM_BASE, PCM_LEN);
+    clk_reg = (uint32_t*)map_peripheral(CLK_BASE, CLK_LEN);
+    gpio_reg = (uint32_t*)map_peripheral(GPIO_BASE, GPIO_LEN);
+    for (i = 0; i < NUM_GPIOS; i++) {
+	gpio_set(gpio_list[i], 0);
+	gpio_set_mode(gpio_list[i], GPIO_MODE_IN);
+    }
+    set_sigaction();
+    init_buffer(); 
+    init_ctrl_data(trans_page, con_blocks);
+    fprintf(stderr, "goodbye, world!\n");
+    init_hardware((uint32_t) *con_blocks->phys_pages | 0xC0000000);
+    fprintf(stderr, "goodbye, world 2!\n");
 
-  set_sigaction();
-  init_buffer(); 
-  init_ctrl_data(trans_page, con_blocks);
-  init_hardware((uint32_t) *con_blocks->phys_pages | 0x40000000);
+    udelay(300000);
 
-  udelay(300000);
+    pthread_attr_t thread_attr, thread_attr2;
+    struct sched_param param, param2;
+    memset(&param, 0, sizeof(param));
 
-  pthread_attr_t thread_attr, thread_attr2;
-  struct sched_param param, param2;
-  memset(&param, 0, sizeof(param));
+    fprintf(stderr, "goodbye, world 3!\n");
   
-  param.sched_priority = 1;
-  sched_setscheduler(0, SCHED_FIFO, &param);
+    param.sched_priority = 1;
+    sched_setscheduler(0, SCHED_FIFO, &param);
   
-  pthread_attr_init(&thread_attr);
-  param.sched_priority = proc_priority;
-  (void)pthread_attr_setschedparam(&thread_attr, &param);
-  pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
+    pthread_attr_init(&thread_attr);
+    param.sched_priority = proc_priority;
+    (void)pthread_attr_setschedparam(&thread_attr, &param);
+    pthread_attr_setschedpolicy(&thread_attr, SCHED_FIFO);
   
-  pthread_create(&_signal_handler, &thread_attr, &signal_processing , NULL);
+    pthread_create(&_signal_handler, &thread_attr, &signal_processing , NULL);
   
-  memset(&param2, 0, sizeof(param2));
+    memset(&param2, 0, sizeof(param2));
   
-  pthread_attr_init(&thread_attr2);
-  param2.sched_priority = 1;
-  (void)pthread_attr_setschedparam(&thread_attr2, &param2);
-  pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
+    pthread_attr_init(&thread_attr2);
+    param2.sched_priority = 1;
+    (void)pthread_attr_setschedparam(&thread_attr2, &param2);
+    pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);
   
-  pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
+    pthread_create(&_output_thread, &thread_attr2, &output_thread , NULL);
 
-  /*  memset(&param2, 0, sizeof(param2));
+    /*  memset(&param2, 0, sizeof(param2));
   
-  pthread_attr_init(&thread_attr2);
-  param2.sched_priority = 1;
-  (void)pthread_attr_setschedparam(&thread_attr2, &param2);
-  pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);*/
+	pthread_attr_init(&thread_attr2);
+	param2.sched_priority = 1;
+	(void)pthread_attr_setschedparam(&thread_attr2, &param2);
+	pthread_attr_setschedpolicy(&thread_attr2, SCHED_FIFO);*/
   
-  //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
+    //  pthread_create(&_time_thread, &thread_attr2, &time_thread , NULL);
 
-  while(1) sleep(100000);
-  return 0;
+    while(1) sleep(100000);
+    return 0;
 }

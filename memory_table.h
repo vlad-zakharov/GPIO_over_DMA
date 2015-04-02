@@ -37,5 +37,5 @@ void* mt_get_virt_from_pointer(volatile memory_table_t* mt, uint32_t pointer);
 
 void* mt_get_phys_from_pointer(volatile memory_table_t* mt, uint32_t pointer);
 
-int32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr);
+uint32_t mt_get_pointer_from_virt(volatile memory_table_t* mt, void* virt_addr);
 #endif
